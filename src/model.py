@@ -1,7 +1,15 @@
 from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
+from src.latent import Latent, initialize_latent, sample_latent
 
 from train import Loss
-from dataloader import mudata_to_dataloader
+from dataloader import (
+    Modality,
+    MultimodalDatasetItem,
+    MultimodalDatasetItemT,
+    mudata_to_dataloader,
+)
 import numpy as np
 import torch
 from torch import nn, optim
@@ -25,53 +33,7 @@ from .utils import (
     SplitMethod,
     split_into_train_test,
     _anndata_loader,
-    _anndata_splitter_leave_sample_out,
 )
-
-
-class EarlyStopping:
-    """
-    Early stops the training if training/validation loss doesn't improve after a given patience.
-    """
-
-    def __init__(self, patience=7, verbose=False, delta=0, mode="train"):
-        """
-        Args:
-            patience (int): How long to wait after last time validation loss improved.
-                            Default: 7
-            verbose (bool): If True, prints a message for each validation loss improvement.
-                            Default: False
-            delta (float): Minimum change in the monitored quantity to qualify as an improvement.
-                            Default: 0
-        """
-        self.patience = patience
-        self.verbose = verbose
-        self.counter = 0
-        self.best_score = None
-        self.early_stop = False
-        self.val_loss_min = np.Inf
-        self.delta = delta
-        self.mode = mode
-
-    def __call__(self, val_loss):
-        score = -val_loss
-        if self.best_score is None:
-            self.best_score = score
-            # self.save_checkpoint(val_loss, model)
-        elif self.mode == "valid" and score <= self.best_score + self.delta:
-            self.counter += 1
-            # print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
-            if self.counter >= self.patience:
-                self.early_stop = True
-        elif self.mode == "train" and score <= self.best_score + self.delta:
-            self.counter += 1
-            # print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
-            if self.counter >= self.patience:
-                self.early_stop = True
-        else:
-            self.best_score = score
-            # self.save_checkpoint(val_loss, model)
-            self.counter = 0
 
 
 class PoE(nn.Module):
@@ -89,21 +51,6 @@ class PoE(nn.Module):
         pd_var = 1.0 / torch.sum(T, dim=0)
         pd_logvar = torch.log(pd_var + eps)
         return pd_mu, pd_logvar
-
-
-def prior_expert(size, use_cuda=False):
-    """Universal prior expert. Here we use a spherical
-    Gaussian: N(0, 1).
-    @param size: integer
-                 dimensionality of Gaussian
-    @param use_cuda: boolean [default: False]
-                     cast CUDA on variables
-    """
-    mu = Variable(torch.zeros(size))
-    logvar = Variable(torch.log(torch.ones(size)))
-    if use_cuda:
-        mu, logvar = mu.cuda(), logvar.cuda()
-    return mu, logvar
 
 
 # Utils functions for mmd (maximum mean discrepancy)
@@ -236,36 +183,6 @@ class MVAEParams:
     batch_size = 32
 
 
-@dataclass
-class TrainParams:
-    """
-    Parameters
-    ----------
-    learning_rate
-        learning rate
-    n_epochs
-        number of epochs to train model
-    train_size
-        a number between 0 and 1 to indicate the proportion of training data. Test size is set to 1-train_size
-    batch_size
-        number of samples per batch
-    shuffle
-        whether to shuffle samples or not
-    leave_sample_out
-        str: name of sample to leave out in training
-    """
-
-    learning_rate = 1e-4
-    n_epochs = 500
-    train_size = 1.0
-    batch_size = 128
-    batch_split = None
-    shuffle = True
-    leave_sample_out = None
-    train_patience = 20
-    test_patience = 20
-
-
 class FullyConnectedLayers(nn.Sequential):
     """
     Architecture:
@@ -311,6 +228,8 @@ class ModalityLayers:
     """
 
     def __init__(self, n_in, n_batch, params: MVAEParams) -> None:
+        self.n_batch = n_batch
+        self.params = params
         self.shared_sampling = SamplingLayers(
             params.n_hidden, params.z_dim, params.dropout
         )
@@ -338,6 +257,36 @@ class ModalityLayers:
         )
         self.final = nn.Sequential(
             torch.nn.Linear(params.n_hidden, n_in), torch.nn.ReLU()
+        )
+
+    def sample_latent(self, y, batch_id) -> Tuple[Latent, Latent, Latent]:
+        mu_s, logvar_s = self.shared_sampling.mean(y), self.shared_sampling.logvar(y)
+        mu_p_mod, logvar_p_mod = self.private_sampling.mean(
+            y
+        ), self.private_sampling.logvar(y)
+        mu_p, logvar_p = self.batch_sampling.mean(y), self.batch_sampling.logvar(y)
+
+        batch_encoding = torch.squeeze(
+            F.one_hot(batch_id.to(torch.int64), num_classes=self.n_batch)
+        ).unsqueeze(1)
+        if self.n_batch > 1:
+            mu_p = (
+                mu_p.reshape((-1, self.params.z_dim, self.n_batch)) * batch_encoding
+            ).sum(-1)
+            logvar_p = (
+                logvar_p.reshape((-1, self.params.z_dim, self.n_batch)) * batch_encoding
+            ).sum(-1)
+        else:
+            mu_p = torch.zeros_like(mu_s).to(self.device)
+            logvar_p = torch.zeros_like(logvar_s).to(self.device)
+
+        z_p = sample_latent(mu_p, logvar_p)
+        z_p_mod = sample_latent(mu_p_mod, logvar_p_mod)
+        z_s = sample_latent(mu_s, logvar_s)
+        return (
+            Latent(z_p, mu_p, logvar_p),
+            Latent(z_p_mod, mu_p_mod, logvar_p_mod),
+            Latent(z_s, mu_s, logvar_s),
         )
 
 
@@ -383,124 +332,33 @@ class MVAE(torch.nn.Module):
         self.msi = ModalityLayers(msi_shape[1], self.n_batch_mod2, params)
         self.poe = PoE()
 
-    def _get_inference_input(self, tensors):
-        """Parse tensor dictionary. From SCVI [Lopez2018]."""
-        X1 = tensors[_CONSTANTS.MODALITY1_KEY]
-        X2 = tensors[_CONSTANTS.MODALITY2_KEY]
-
-        batch_id1 = tensors["batch_id1"]
-        batch_id2 = tensors["batch_id2"]
-
-        cat_key = _CONSTANTS.CAT_COVS_KEY
-        cat_covs = tensors[cat_key] if cat_key in tensors.keys() else None
-
-        input_dict = dict(
-            X1=X1, X2=X2, batch_id1=batch_id1, batch_id2=batch_id2, cat_covs=cat_covs
-        )
-        return input_dict
-
-    def _get_generative_input(self, tensors, z):
-        """Parse tensor dictionary for generative model. From SCVI [Lopez2018]."""
-        batch_id1 = tensors["batch_id1"]
-        batch_id2 = tensors["batch_id2"]
-
-        cat_key = _CONSTANTS.CAT_COVS_KEY
-        cat_covs = tensors[cat_key] if cat_key in tensors.keys() else None
-        return dict(z=z, batch_id1=batch_id1, batch_id2=batch_id2, cat_covs=cat_covs)
-
     def encode(
         self,
-        modality,
-        mod_idxs_1,
-        mod_idxs_2,
-        X1,
-        X2,
-        batch_id1,
-        batch_id2,
-        cat_covs=None,
-    ):
+        modality_layers: ModalityLayers,
+        data: torch.Tensor,
+        batch_id: torch.Tensor,
+        mod_idxs,
+        cat_covs: Optional[torch.Tensor] = None,
+    ) -> Tuple[Latent, Latent, Latent]:
         """
         Encode data in latent space (Inference step).
         Parameters
         ----------
-        X
-            input data
-        batch_index
-            batch information for samples
-        cat_covs
-            categorical covariates
-        Returns
-        ------
-        z
-            data in latent space
-        mu
-            mean of variational posterior
-        logvar
-            log-variance of variational posterior
+        data - input data
+        mod_idxs - observations where modality is present
+        batch_index - batch information for samples
+        cat_covs - categorical covariates
         """
-        if cat_covs is not None and self.encode_covariates is True:
+        if cat_covs and self.params.encode_covariates:
             categorical_input = torch.split(cat_covs, 1, dim=1)
         else:
             categorical_input = tuple()
-        if modality == _CONSTANTS.MODALITY1_KEY:
-            batch_id1 = batch_id1[mod_idxs_1, :]
-            X1 = torch.squeeze(X1[mod_idxs_1, :, :])
-            y = self.encoder1(X1, batch_id1, *categorical_input)
-            mu_p, logvar_p = self.mean1_private(y), self.logvar1_private(y)
-            mu_s, logvar_s = self.mean1_shared(y), self.logvar1_shared(y)
-            # Now for modality-specific info
-            mu_p_mod, logvar_p_mod = self.mean1_private_mod(
-                y
-            ), self.logvar1_private_mod(y)
 
-            batch1_encoding = torch.squeeze(
-                F.one_hot(batch_id1.to(torch.int64), num_classes=self.n_batch_mod1)
-            )
+        batch_id = batch_id[mod_idxs, :]
+        X = torch.squeeze(data[mod_idxs, :, :])
+        y = modality_layers.encoder(X, batch_id, *categorical_input)
 
-            if self.n_batch_mod1 > 1:
-                mu_p = (
-                    mu_p.reshape((-1, self.z_dim, self.n_batch_mod1))
-                    * batch1_encoding.unsqueeze(1)
-                ).sum(-1)
-                logvar_p = (
-                    logvar_p.reshape((-1, self.z_dim, self.n_batch_mod1))
-                    * batch1_encoding.unsqueeze(1)
-                ).sum(-1)
-            else:
-                mu_p = torch.zeros_like(mu_s).to(self.device)
-                logvar_p = torch.zeros_like(logvar_s).to(self.device)
-
-        elif modality == _CONSTANTS.MODALITY2_KEY:
-            batch_id2 = batch_id2[mod_idxs_2, :]
-            X2 = torch.squeeze(X2[mod_idxs_2, :, :])
-            y = self.encoder2(X2, batch_id2, *categorical_input)
-            mu_p, logvar_p = self.mean2_private(y), self.logvar2_private(y)
-            mu_s, logvar_s = self.mean2_shared(y), self.logvar2_shared(y)
-            # Now for modality-specific info
-            mu_p_mod, logvar_p_mod = self.mean2_private_mod(
-                y
-            ), self.logvar2_private_mod(y)
-
-            batch2_encoding = torch.squeeze(
-                F.one_hot(batch_id2.to(torch.int64), num_classes=self.n_batch_mod2)
-            )
-            if self.n_batch_mod2 > 1:
-                mu_p = (
-                    mu_p.reshape((-1, self.z_dim, self.n_batch_mod2))
-                    * batch2_encoding.unsqueeze(1)
-                ).sum(-1)
-                logvar_p = (
-                    logvar_p.reshape((-1, self.z_dim, self.n_batch_mod2))
-                    * batch2_encoding.unsqueeze(1)
-                ).sum(-1)
-            else:
-                mu_p = torch.zeros_like(mu_s).to(self.device)
-                logvar_p = torch.zeros_like(logvar_s).to(self.device)
-
-        z_p = self.sample_latent(mu_p, logvar_p)
-        z_p_mod = self.sample_latent(mu_p_mod, logvar_p_mod)
-        z_s = self.sample_latent(mu_s, logvar_s)
-        return z_p, mu_p, logvar_p, z_p_mod, mu_p_mod, logvar_p_mod, z_s, mu_s, logvar_s
+        return modality_layers.sample_latent(y, batch_id)
 
     def decode(self, z, batch_id1, batch_id2, modality=None, cat_covs=None):
         """
@@ -532,27 +390,6 @@ class MVAE(torch.nn.Module):
             X = self.final2(X)
 
         return X
-
-    def sample_latent(self, mu, logvar):
-        """
-        Sample latent space with reparametrization trick. First convert to std, sample normal(0,1) and get Z.
-        Parameters
-        ----------
-        mu
-            mean of variational posterior
-        logvar
-            log-variance of variational posterior
-        Returns
-        -------
-        eps
-            sampled latent space
-        """
-        std = logvar.mul(0.5).exp_()
-        eps = torch.FloatTensor(std.size()).normal_()
-        if self.use_cuda:
-            eps = eps.to(torch.device("cuda"))
-        eps = eps.mul_(std).add_(mu)
-        return eps
 
     @torch.no_grad()
     def to_latent(
@@ -680,92 +517,61 @@ class MVAE(torch.nn.Module):
 
         return x1_poe, x2_poe, x1, x2, x1_2, x2_1, x1_batch_free, x2_batch_free
 
-    def forward(self, tensors):
-        """
-        Forward pass through full network.
+    def forward(self, tensors: MultimodalDatasetItemT):
+        input = MultimodalDatasetItem(**tensors)
+        mod_id = input.mod_id
 
-        Parameters
-        ----------
-        tensors
-            input data
+        mu, logvar = initialize_latent([1, mod_id.shape[0], self.z_dim], use_cuda=True)
 
-        Returns
-        -------
-        out_tensors
-            dictionary of output tensors
-        """
-        dev = torch.device("cuda") if self.use_cuda else torch.device("cpu")
-
-        mod_id = tensors["mod_id"]
-        input_encode = self._get_inference_input(tensors)
-
-        mu, logvar = prior_expert((1, mod_id.shape[0], self.z_dim), use_cuda=True)
-
-        # Prior for private representation
-        mu1_p, logvar1_p = prior_expert((mod_id.shape[0], self.z_dim), use_cuda=True)
-        mu1_p_mod, logvar1_p_mod = prior_expert(
-            (mod_id.shape[0], self.z_dim), use_cuda=True
-        )
-        mu2_p, logvar2_p = prior_expert((mod_id.shape[0], self.z_dim), use_cuda=True)
-        mu2_p_mod, logvar2_p_mod = prior_expert(
-            (mod_id.shape[0], self.z_dim), use_cuda=True
-        )
-        z1_p = self.sample_latent(mu1_p, logvar1_p)
-        z1_p_mod = self.sample_latent(mu1_p_mod, logvar1_p_mod)
-        z2_p = self.sample_latent(mu2_p, logvar2_p)
-        z2_p_mod = self.sample_latent(mu2_p_mod, logvar2_p_mod)
-
-        # Prior for shared representation
-        mu1_s, logvar1_s = prior_expert((mod_id.shape[0], self.z_dim), use_cuda=True)
-        mu2_s, logvar2_s = prior_expert((mod_id.shape[0], self.z_dim), use_cuda=True)
-        z1_s = self.sample_latent(mu1_s, logvar1_s)
-        z2_s = self.sample_latent(mu2_s, logvar2_s)
+        rna_latent_p = initialize_latent((mod_id.shape[0], self.z_dim), use_cuda=True)
+        rna_latent_mod = initialize_latent((mod_id.shape[0], self.z_dim), use_cuda=True)
+        rna_latent_s = initialize_latent((mod_id.shape[0], self.z_dim), use_cuda=True)
+        msi_latent_p = initialize_latent((mod_id.shape[0], self.z_dim), use_cuda=True)
+        msi_latent_mod = initialize_latent((mod_id.shape[0], self.z_dim), use_cuda=True)
+        msi_latent_s = initialize_latent((mod_id.shape[0], self.z_dim), use_cuda=True)
 
         mod_idxs_1 = (mod_id == 1) | (mod_id == 3)
         mod_idxs_2 = (mod_id == 2) | (mod_id == 3)
 
-        #   self.encode returns: z_p, mu_p, logvar_p, z_p_mod, mu_p_mod, logvar_p_mod, z_s, mu_s, logvar_s
-
-        (
-            z1_p[mod_idxs_1, :],
-            mu1_p[mod_idxs_1, :],
-            logvar1_p[mod_idxs_1, :],
-            z1_p_mod[mod_idxs_1, :],
-            mu1_p_mod[mod_idxs_1, :],
-            logvar1_p_mod[mod_idxs_1, :],
-            z1_s[mod_idxs_1, :],
-            mu1_s[mod_idxs_1, :],
-            logvar1_s[mod_idxs_1, :],
-        ) = self.encode(
-            modality=_CONSTANTS.MODALITY1_KEY,
-            mod_idxs_1=mod_idxs_1,
-            mod_idxs_2=mod_idxs_2,
-            **input_encode,
+        rna_post_p, rna_post_mod, rna_post_s = self.encode(
+            self.rna,
+            input.rna,
+            mod_idxs_1,
+            input.batch_id1,
+            input.extra_categorical_covs,
         )
-        (
-            z2_p[mod_idxs_2, :],
-            mu2_p[mod_idxs_2, :],
-            logvar2_p[mod_idxs_2, :],
-            z2_p_mod[mod_idxs_2, :],
-            mu2_p_mod[mod_idxs_2, :],
-            logvar2_p_mod[mod_idxs_2, :],
-            z2_s[mod_idxs_2, :],
-            mu2_s[mod_idxs_2, :],
-            logvar2_s[mod_idxs_2, :],
-        ) = self.encode(
-            modality=_CONSTANTS.MODALITY2_KEY,
-            mod_idxs_1=mod_idxs_1,
-            mod_idxs_2=mod_idxs_2,
-            **input_encode,
+        msi_post_p, msi_post_mod, msi_post_s = self.encode(
+            self.msi,
+            input.msi,
+            mod_idxs_2,
+            input.batch_id2,
+            input.extra_categorical_covs,
         )
+        for prior, post in zip(
+            [rna_latent_p, rna_latent_mod, rna_latent_s],
+            [rna_post_p, rna_post_mod, rna_post_s],
+        ):
+            prior.update(post)
 
-        mu = torch.cat((mu, mu1_s.unsqueeze(0), mu2_s.unsqueeze(0)), dim=0)
+        for prior, post in zip(
+            [msi_latent_p, msi_latent_mod, msi_latent_s],
+            [msi_post_p, msi_post_mod, msi_post_s],
+        ):
+            prior.update(post)
+
+        mu = torch.cat(
+            (mu, rna_latent_s.mu.unsqueeze(0), msi_latent_s.mu.unsqueeze(0)), dim=0
+        )
         logvar = torch.cat(
-            (logvar, logvar1_s.unsqueeze(0), logvar2_s.unsqueeze(0)), dim=0
+            (
+                logvar,
+                rna_latent_s.logvar.unsqueeze(0),
+                msi_latent_s.logvar.unsqueeze(0),
+            ),
+            dim=0,
         )
-
         mu, logvar = self.poe(mu, logvar)
-        z_poe = self.sample_latent(mu, logvar)
+        z_poe = sample_latent(mu, logvar, self.params.use_cuda)
 
         input_decode1_poe = self._get_generative_input(
             tensors, z1_p + z_poe
@@ -1333,8 +1139,8 @@ class MVAE(torch.nn.Module):
 
     def _train_model(
         self,
-        train_loader,
-        train_loader_pairs,
+        train_loader: torch.utils.data.DataLoader,
+        train_loader_pairs: torch.utils.data.DataLoader,
         test_loader=None,
         test_loader_pairs=None,
         params: TrainParams = TrainParams(),
@@ -1369,9 +1175,9 @@ class MVAE(torch.nn.Module):
                 loss = Loss()
 
                 # Send input to device
-                model_input = {k: v.to(device) for k, v in model_input.items()}
+                model_input = {k: v.to(self.device) for k, v in model_input.items()}
                 model_input_pairs = {
-                    k: v.to(device) for k, v in model_input_pairs.items()
+                    k: v.to(self.device) for k, v in model_input_pairs.items()
                 }
                 optimizer.zero_grad()
 
