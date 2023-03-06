@@ -1,14 +1,9 @@
 from dataclasses import asdict, dataclass
 from typing import List, Optional, Tuple
 
-from src.types import Modality
+from src.types import Modality, ModalityOutputT, ModelInputT, ModelOutputT
 
 from src.latent import Latent, initialize_latent, sample_latent
-
-from types import (
-    ModelInputT,
-    ModelOutputT,
-)
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -16,33 +11,12 @@ import torch.nn.functional as F
 from mudata import MuData
 
 
-class PoE(nn.Module):
-    """Return parameters for product of independent experts.
-    See https://arxiv.org/pdf/1410.7827.pdf for equations.
-    @param mu: M x D for M experts
-    @param logvar: M x D for M experts
-    """
-
-    def forward(self, mu, logvar, eps=1e-8):
-        var = torch.exp(logvar) + eps
-        # precision of i-th Gaussian expert at point x
-        T = 1.0 / (var + eps)
-        pd_mu = torch.sum(mu * T, dim=0) / torch.sum(T, dim=0)
-        pd_var = 1.0 / torch.sum(T, dim=0)
-        pd_logvar = torch.log(pd_var + eps)
-        return pd_mu, pd_logvar
-
-
 @dataclass
 class MVAEParams:
-    """
-    beta - KL divergence term hyperparam for MVAE
-    """
-
     n_layers = 2
     n_hidden = 800
     z_dim = 200
-    beta = 0.1
+    beta = 0.1  # KL divergence term hyperparam for MVAE
     dropout = 0.1
     z_dropout = 0.3
     encode_covariates = False
@@ -50,10 +24,6 @@ class MVAEParams:
 
 
 class FullyConnectedLayers(nn.Sequential):
-    """
-    Architecture:
-    """
-
     def __init__(
         self,
         n_in,
@@ -74,7 +44,7 @@ class FullyConnectedLayers(nn.Sequential):
         layers = []
         for layer_in, layer_out in zip(dims, dims[1:]):
             layers.append(nn.Linear(layer_in, layer_out))
-            layers.append(nn.PReLU())
+            layers.append(activation_fn())
             layers.append(nn.Dropout(dropout_rate))
         super().__init__(*layers)
 
@@ -165,6 +135,23 @@ class ModalityLayers:
         )
 
 
+class PoE(nn.Module):
+    """Return parameters for product of independent experts.
+    See https://arxiv.org/pdf/1410.7827.pdf for equations.
+    @param mu: M x D for M experts
+    @param logvar: M x D for M experts
+    """
+
+    def forward(self, mu, logvar, eps=1e-8):
+        var = torch.exp(logvar) + eps
+        # precision of i-th Gaussian expert at point x
+        T = 1.0 / (var + eps)
+        pd_mu = torch.sum(mu * T, dim=0) / torch.sum(T, dim=0)
+        pd_var = 1.0 / torch.sum(T, dim=0)
+        pd_logvar = torch.log(pd_var + eps)
+        return pd_mu, pd_logvar
+
+
 class MVAE(torch.nn.Module):
     """
     Architecture:
@@ -189,7 +176,6 @@ class MVAE(torch.nn.Module):
         self.n_batch_mod1 = mdata.mod[Modality.rna.name].uns["_scvi"]["summary_stats"][
             "n_batch"
         ]
-
         self.n_batch_mod2 = mdata.mod[Modality.msi.name].uns["_scvi"]["summary_stats"][
             "n_batch"
         ]
@@ -266,21 +252,21 @@ class MVAE(torch.nn.Module):
             input["extra_categorical_covs"],
         )
         return ModelOutputT(
-            ModalityOutputT(
+            rna=ModalityOutputT(
                 *rna_latent_decoded,
                 asdict(rna_latent_p),
                 asdict(rna_latent_mod),
                 asdict(rna_latent_s),
             ),
-            ModalityOutputT(
+            msi=ModalityOutputT(
                 *msi_latent_decoded,
                 asdict(msi_latent_p),
                 asdict(msi_latent_mod),
                 asdict(msi_latent_s),
             ),
-            poe_latent,
-            rna_msi_loss,
-            msi_rna_loss,
+            poe_latent=poe_latent,
+            rna_msi_loss=rna_msi_loss,
+            msi_rna_loss=msi_rna_loss,
         )
 
     def encode_modality(
