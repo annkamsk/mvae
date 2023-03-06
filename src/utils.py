@@ -1,189 +1,30 @@
-from enum import Enum
 from typing import List, Optional, Tuple
-import warnings
-import torch
+import scanpy as sc
 import numpy as np
-from .constants import _CONSTANTS
-from scipy import sparse
 from mudata import MuData
-from torch.utils.data import RandomSampler
 
 
-def _anndata_loader(mdata: MuData, batch_size: int, shuffle=False):
-    """
-    Load Anndata object into pytorch standard dataloader.
-    Args:
-        adata (AnnData): Scanpy Anndata object.
-        batch_size (int): Cells per batch.
-        shuffle (bool): Whether to shuffle data or not.
-    iReturn:
-        sc_dataloader (torch.DataLoader): Dataloader containing the data.
-    """
+def plot_emb_mod(pred, mod, batch):
+    pred = np.concatenate(pred)
+    mod = np.concatenate(mod).flatten()
+    batch = np.concatenate(batch).flatten()
 
-    class multimodalDataset(torch.utils.data.dataset.Dataset):
-        def __init__(self, _dataset):
-            self.dataset = _dataset
-            self.indices = np.arange(_dataset[0].n_obs)
+    ad = sc.AnnData(pred, obs=pd.DataFrame({"mod": mod, "batch": batch}))
+    ad.obs["mod"] = ad.obs["mod"].astype("category")
+    ad.obs["batch"] = ad.obs["batch"].astype("category")
+    sc.pp.neighbors(ad)
+    sc.tl.umap(ad)
+    sc.pl.umap(ad, color=["mod", "batch"])
 
-        def __getitem__(self, index):
-            idx = self.dataset[0].obs.index[index]
-            mod_id = self.dataset[1][index]
-            if mod_id == 1:
-                if mod1_obsm:
-                    data1 = (
-                        self.dataset[0]
-                        .mod[_CONSTANTS.MODALITY1_KEY][idx, :]
-                        .obsm[mod1_obsm]
-                    )
-                else:
-                    data1 = self.dataset[0].mod[_CONSTANTS.MODALITY1_KEY][idx, :].X
-                if mod2_obsm:
-                    data2 = torch.empty(
-                        (
-                            1,
-                            self.dataset[0]
-                            .mod[_CONSTANTS.MODALITY2_KEY]
-                            .obsm[mod2_obsm]
-                            .shape[1],
-                        )
-                    )
-                else:
-                    data2 = torch.empty(
-                        (1, self.dataset[0].mod[_CONSTANTS.MODALITY2_KEY].n_vars)
-                    )
 
-                batch_id1 = (
-                    self.dataset[0]
-                    .mod[_CONSTANTS.MODALITY1_KEY][idx, :]
-                    .obs.loc[:, _CONSTANTS.BATCH_KEY]
-                    .values
-                )
-                batch_id2 = [-1]
-
-            elif mod_id == 2:
-                if mod2_obsm:
-                    data2 = (
-                        self.dataset[0]
-                        .mod[_CONSTANTS.MODALITY2_KEY][idx, :]
-                        .obsm[mod2_obsm]
-                    )
-                else:
-                    data2 = self.dataset[0].mod[_CONSTANTS.MODALITY2_KEY][idx, :].X
-                if mod1_obsm:
-                    data1 = torch.empty(
-                        (
-                            1,
-                            self.dataset[0]
-                            .mod[_CONSTANTS.MODALITY1_KEY]
-                            .obsm[mod1_obsm]
-                            .shape[1],
-                        )
-                    )
-                else:
-                    data1 = torch.empty(
-                        (1, self.dataset[0].mod[_CONSTANTS.MODALITY1_KEY].n_vars)
-                    )
-
-                batch_id1 = [-1]
-                batch_id2 = (
-                    self.dataset[0]
-                    .mod[_CONSTANTS.MODALITY2_KEY][idx, :]
-                    .obs.loc[:, _CONSTANTS.BATCH_KEY]
-                    .values
-                )
-
-            elif mod_id == 3:
-                if mod1_obsm:
-                    data1 = (
-                        self.dataset[0]
-                        .mod[_CONSTANTS.MODALITY1_KEY][idx, :]
-                        .obsm[mod1_obsm]
-                    )
-                else:
-                    data1 = self.dataset[0].mod[_CONSTANTS.MODALITY1_KEY][idx, :].X
-                if mod2_obsm:
-                    data2 = (
-                        self.dataset[0]
-                        .mod[_CONSTANTS.MODALITY2_KEY][idx, :]
-                        .obsm[mod2_obsm]
-                    )
-                else:
-                    data2 = self.dataset[0].mod[_CONSTANTS.MODALITY2_KEY][idx, :].X
-
-                batch_id1 = (
-                    self.dataset[0]
-                    .mod[_CONSTANTS.MODALITY1_KEY][idx, :]
-                    .obs.loc[:, _CONSTANTS.BATCH_KEY]
-                    .values
-                )
-                batch_id2 = (
-                    self.dataset[0]
-                    .mod[_CONSTANTS.MODALITY2_KEY][idx, :]
-                    .obs.loc[:, _CONSTANTS.BATCH_KEY]
-                    .values
-                )
-
-            if sparse.issparse(data1):
-                data1 = data1.A
-            if sparse.issparse(data2):
-                data2 = data2.A
-            cat_covs = self.dataset[2][index]
-
-            return {
-                _CONSTANTS.MODALITY1_KEY: torch.Tensor(data1),
-                _CONSTANTS.MODALITY2_KEY: torch.Tensor(data2),
-                "mod_id": mod_id,
-                "batch_id1": torch.ByteTensor(batch_id1),
-                "batch_id2": torch.ByteTensor(batch_id2),
-                "extra_categorical_covs": cat_covs,
-            }
-
-        def __len__(self):
-            return self.dataset[0].shape[0]
-
-    # Encode modalities (mod1:1, mod2:2, paired:3)
-    mdata.obs["mod_id"] = mdata.obsm[_CONSTANTS.MODALITY1_KEY].astype(int) + (
-        mdata.obsm[_CONSTANTS.MODALITY2_KEY].astype(int) * 2
-    )
-    # mdata.obs['batch'] = mdata.obsm[_CONSTANTS.MODALITY1_KEY].astype(int) + (mdata.obsm[_CONSTANTS.MODALITY2_KEY].astype(int)*2)
-
-    sc_dataloader = torch.utils.data.DataLoader(
-        multimodalDataset(
-            [
-                mdata,
-                torch.Tensor(mdata.obs["mod_id"].values),
-                torch.Tensor(mdata.obs.extra_categorical_covs.values.astype(int)),
-            ]
-        ),
-        shuffle=shuffle,
-        batch_size=batch_size,
-        num_workers=8,
-    )
-
-    paired_dataset = multimodalDataset(
-        [
-            mdata[mdata.obs.mod_id == 3, :],
-            torch.Tensor(mdata[mdata.obs.mod_id == 3, :].obs["mod_id"].values),
-            torch.Tensor(mdata[mdata.obs.mod_id == 3, :].obs.batch.values.astype(int)),
-            torch.Tensor(
-                mdata[
-                    mdata.obs.mod_id == 3, :
-                ].obs.extra_categorical_covs.values.astype(int)
-            ),
-        ]
-    )
-
-    sampler = RandomSampler(
-        paired_dataset, replacement=True, num_samples=mdata.shape[0]
-    )
-    sc_dataloader_pairs = torch.utils.data.DataLoader(
-        paired_dataset,
-        sampler=sampler,
-        batch_size=batch_size,
-        num_workers=8,
-        drop_last=True,
-    )
-    return sc_dataloader, sc_dataloader_pairs
+def plot_emb_batch(pred, batch):
+    pred = np.concatenate(pred)
+    batch = np.concatenate(batch).flatten()
+    ad = sc.AnnData(pred, obs=pd.DataFrame({"batch": batch}))
+    ad.obs["batch"] = ad.obs["batch"].astype("category")
+    sc.pp.neighbors(ad)
+    sc.tl.umap(ad)
+    sc.pl.umap(ad, color=["batch"])
 
 
 def split_into_train_test(

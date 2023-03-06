@@ -1,69 +1,14 @@
-from dataclasses import dataclass, asdict
-from enum import IntEnum
-from typing import List, Tuple, TypedDict
+from typing import List, Tuple
+from src.types import Modality, ModelInputT, ObsModalityMembership
 import pandas as pd
 import torch
 import numpy as np
-import src.constants as constants
 from scipy import sparse
 from mudata import MuData
 from torch.utils.data import RandomSampler
 
 
-class Modality(IntEnum):
-    rna = 1
-    msi = 2
-
-
-class ObsModalityMembership(IntEnum):
-    """
-    Represents membership status of an observation across modalities.
-    """
-
-    ONLY_MOD1 = 1
-    ONLY_MOD2 = 2
-    PAIRED = 3
-
-    @classmethod
-    def from_int(cls, value: int) -> "ObsModalityMembership":
-        if value == 1:
-            return cls.ONLY_MOD1
-        elif value == 2:
-            return cls.ONLY_MOD2
-        elif value == 3:
-            return cls.PAIRED
-        else:
-            raise ValueError("Invalid value for ObsModalityMembership")
-
-    @classmethod
-    def from_mudata(cls, mdata: MuData, mod1_key: str, mod2_key: str) -> pd.Series:
-        return pd.Series(
-            mdata.obsm[mod1_key].astype(int) + (mdata.obsm[mod2_key].astype(int) * 2),
-            index=mdata.obs.index,
-        )
-
-
-MultimodalDatasetItemT = TypedDict(
-    "MultimodalDatasetItemT",
-    {
-        "rna": torch.Tensor,
-        "msi": torch.Tensor,
-        "mod_id": int,
-        "batch_id1": torch.ByteTensor,
-        "batch_id2": torch.ByteTensor,
-        "extra_categorical_covs": torch.Tensor,
-    },
-)
-
-
-@dataclass
-class MultimodalDatasetItem:
-    rna: torch.Tensor
-    msi: torch.Tensor
-    mod_id: int
-    batch_id1: torch.ByteTensor
-    batch_id2: torch.ByteTensor
-    extra_categorical_covs: List[int]
+BATCH_KEY = "batch"
 
 
 class MultimodalDataset(torch.utils.data.dataset.Dataset):
@@ -78,22 +23,20 @@ class MultimodalDataset(torch.utils.data.dataset.Dataset):
         self.extra_categorical_covs = torch.Tensor(extra_categorical_covs)
         self.indices = np.arange(mdata.n_obs)
 
-    def __getitem__(self, index) -> MultimodalDatasetItemT:
+    def __getitem__(self, index) -> ModelInputT:
         data1 = self._get_modality_data(index, Modality.rna)
         data2 = self._get_modality_data(index, Modality.msi)
         batch1 = self._get_batch_data(index, Modality.rna)
         batch2 = self._get_batch_data(index, Modality.msi)
         cat_covs = self.extra_categorical_covs[index]
 
-        return asdict(
-            MultimodalDatasetItem(
-                torch.Tensor(data1),
-                torch.Tensor(data2),
-                self.modality_membership[index],
-                torch.ByteTensor(batch1),
-                torch.ByteTensor(batch2),
-                cat_covs,
-            )
+        return ModelInputT(
+            torch.Tensor(data1),
+            torch.Tensor(data2),
+            self.modality_membership[index],
+            torch.ByteTensor(batch1),
+            torch.ByteTensor(batch2),
+            cat_covs,
         )
 
     def _is_item_in_modality(self, index, modality: Modality) -> bool:
@@ -119,11 +62,7 @@ class MultimodalDataset(torch.utils.data.dataset.Dataset):
     def _get_batch_data(self, index, modality: Modality):
         idx = self.dataset.obs.index[index]
         if self._is_item_in_modality(index, modality):
-            return (
-                self.dataset.mod[modality.name][idx, :]
-                .obs.loc[:, constants.BATCH_KEY]
-                .values
-            )
+            return self.dataset.mod[modality.name][idx, :].obs.loc[:, BATCH_KEY].values
         else:
             return [-1]
 

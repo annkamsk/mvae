@@ -1,8 +1,13 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, TypedDict
 
 import torch
 from torch.autograd import Variable
+
+
+LatentT = TypedDict(
+    "LatentT", {"z": torch.Tensor, "mu": torch.Tensor, "logvar": torch.Tensor}
+)
 
 
 @dataclass
@@ -21,6 +26,11 @@ class Latent:
         self.z[idx, :] = latent.z
         self.mu[idx, :] = latent.mu
         self.logvar[idx, :] = latent.logvar
+
+    def kld(self):
+        return -0.5 * torch.mean(
+            1.0 + self.logvar - self.mu.pow(2) - self.logvar.exp(),
+        )
 
 
 def prior_expert(size: List[int], use_cuda=False):

@@ -1,12 +1,21 @@
 from dataclasses import dataclass
 import datetime
+from typing import Dict
+
+from src.dataloader import mudata_to_dataloader
+
+from src.utils import split_into_train_test
+
+from src.loss import Loss
+
+from src.types import ModalityOutput, ModelInputT, ModelOutputT
 
 import numpy as np
 from tqdm import tqdm
 from src.model import MVAE
 from torch.utils.tensorboard import SummaryWriter
 import torch
-from torch import nn, optim
+from torch import optim
 
 
 @dataclass
@@ -37,37 +46,8 @@ class TrainParams:
     leave_sample_out = None
     train_patience = 20
     test_patience = 20
-
-
-@dataclass
-class Loss:
-    loss_value = 0
-    loss_rec_rna_v = 0
-    loss_rec_msi_v = 0
-    loss_trls_msi_v = 0
-    loss_trls_rna_v = 0
-    loss_rec_rna_poe_v = 0
-    loss_rec_msi_poe_v = 0
-    loss_kl_v = 0
-    loss_kl1_p_v = 0
-    loss_kl1_p_mod_v = 0
-    loss_kl1_s_v = 0
-    loss_kl2_p_v = 0
-    loss_kl2_p_mod_v = 0
-    loss_kl2_s_v = 0
-    loss_mmd_v = 0
-    loss_shared_v = 0
-    loss_private_v = 0
-    loss_private_mod_v = 0
-    loss_batch_mod1_v = 0
-    loss_batch_mod2_v = 0
-    loss_cos1_v = 0
-    loss_cos2_v = 0
-
-    ####################################
-    loss_batch_1_v = 0
-    loss_batch_2_v = 0
-    ####################################
+    rna_loss = "mse"
+    msi_loss = "bce"
 
 
 class EarlyStopping:
@@ -99,10 +79,67 @@ class EarlyStopping:
 
         self.counter += 1
         if self.counter >= self.patience:
+            print(
+                f"EarlyStopping: {self.mode} loss hasn't improved: {score}. Stopping."
+            )
             self.early_stop = True
 
     def _has_score_improved(self, current_score) -> bool:
         return self.best_score is None or current_score > self.best_score - self.delta
+
+
+def log_loss(writer, loss_values: Dict[str, float], iteration: int, train=True) -> None:
+    for key, value in loss_values.items():
+        if train:
+            writer.add_scalar(f"PoE_training/{key}", value, iteration)
+        else:
+            writer.add_scalar(f"PoE_test/{key}", value, iteration)
+
+
+def extract_latent(model_output: ModelOutputT):
+    rna_output = ModalityOutput.from_dict(model_output["rna"])
+    msi_output = ModalityOutput.from_dict(model_output["msi"])
+    return {
+        "poe_latent": model_output["poe_latent"]["z"].cpu().numpy(),
+        "rna_p": rna_output.latent_p.z.cpu().numpy(),
+        "rna_mod": rna_output.latent_mod.z.cpu().numpy(),
+        "rna_s": rna_output.latent_s.z.cpu().numpy(),
+        "msi_p": msi_output.latent_p.z.cpu().numpy(),
+        "msi_mod": msi_output.latent_mod.z.cpu().numpy(),
+        "msi_s": msi_output.latent_s.z.cpu().numpy(),
+    }
+
+
+def train_mvae(model, mdata, params=TrainParams()):
+    train_mdata, test_mdata = split_into_train_test(
+        mdata,
+        params.train_size,
+        sample=params.leave_sample_out,
+        batch_split=params.batch_split,
+    )
+
+    train_loader, train_loader_pairs = mudata_to_dataloader(
+        train_mdata,
+        batch_size=params.batch_size,
+        shuffle=params.shuffle,
+    )
+    test_loader, test_loader_pairs = mudata_to_dataloader(
+        test_mdata,
+        batch_size=params.batch_size,
+        shuffle=params.shuffle,
+    )
+
+    model.to(model.device)
+
+    epoch_history = train(
+        train_loader,
+        train_loader_pairs,
+        test_loader,
+        test_loader_pairs,
+        params,
+    )
+    model.eval()
+    return model, epoch_history
 
 
 def train(
@@ -137,146 +174,209 @@ def train(
             zip(train_loader, train_loader_pairs), total=len(train_loader)
         ):
             optimizer.zero_grad()
-            loss = Loss()
+            loss = Loss(params.beta, dropout=True)
 
             # Send input to device
-            model_input = {k: v.to(model.device) for k, v in model_input.items()}
-            model_input_pairs = {
+            model_input: ModelInputT = {
+                k: v.to(model.device) for k, v in model_input.items()
+            }
+            model_input_pairs: ModelInputT = {
                 k: v.to(model.device) for k, v in model_input_pairs.items()
             }
             optimizer.zero_grad()
 
-            model_output = self.forward(model_input)
-            model_output_pairs = self.forward(model_input_pairs)
+            model_output: ModelOutputT = model.forward(model_input)
+            model_output_pairs: ModelOutputT = model.forward(model_input_pairs)
 
-            (
-                loss_private,
-                loss_rec_rna,
-                loss_rec_msi,
-                loss_kl1_p,
-                loss_kl1_s,
-                loss_kl2_p,
-                loss_kl2_s,
-                loss_kl1_p_mod,
-                loss_kl2_p_mod,
-                loss_batch1,
-                loss_batch2,
-            ) = self.private_loss(model_input, model_output)
-            (
-                loss_shared,
-                loss_mmd,
-                loss_trls_msi,
-                loss_trls_rna,
-                loss_rec_rna_poe,
-                loss_rec_msi_poe,
-                loss_kl,
-                loss_cos1,
-                loss_cos2,
-            ) = self.shared_loss(model_input_pairs, model_output_pairs)
+            loss.calculate_private(model_input, model_output)
+            loss.calculate_shared(model_input_pairs, model_output_pairs)
 
-            loss = loss_private + loss_shared  # + loss_batch_mod1 + loss_batch_mod2
-            loss_value += loss.item()
-            loss_rec_rna_v += loss_rec_rna.item()
-            loss_rec_msi_v += loss_rec_msi.item()
-            loss_trls_msi_v += loss_trls_msi.item()
-            loss_trls_rna_v += loss_trls_rna.item()
-            loss_rec_rna_poe_v += loss_rec_rna_poe.item()
-            loss_rec_msi_poe_v += loss_rec_msi_poe.item()
-            loss_kl_v += loss_kl.item()
-            loss_kl1_p_v += loss_kl1_p.item()
-            loss_kl1_p_mod_v += loss_kl1_p_mod.item()
-            loss_kl1_s_v += loss_kl1_s.item()
-            loss_kl2_p_v += loss_kl2_p.item()
-            loss_kl2_p_mod_v += loss_kl2_p_mod.item()
-            loss_kl2_s_v += loss_kl2_s.item()
-            loss_shared_v += loss_shared.item()
-            loss_private_v += loss_private.item()
-            loss_mmd_v += loss_mmd.item()
-            loss_cos1_v += loss_cos1
-            loss_cos2_v += loss_cos2
-
-            ####################################
-            loss_batch_1_v += loss_batch1.item()
-            loss_batch_2_v += loss_batch2.item()
-            ####################################
+            loss_values = loss.values
 
             loss.backward()
             optimizer.step()
 
-            writer.add_scalar("PoE_training/Loss", loss_value, it)
-            writer.add_scalar("PoE_training/mse_rna", loss_rec_rna_v, it)
-            writer.add_scalar("PoE_training/mse_msi", loss_rec_msi_v, it)
-            writer.add_scalar("PoE_training/mse_rna_poe", loss_rec_rna_poe_v, it)
-            writer.add_scalar("PoE_training/mse_msi_poe", loss_rec_msi_poe_v, it)
-            writer.add_scalar("PoE_training/kl_loss", loss_kl_v, it)
-            writer.add_scalar("PoE_training/kl1_p_loss", loss_kl1_p_v, it)
-            writer.add_scalar("PoE_training/kl1_s_loss", loss_kl1_s_v, it)
-            writer.add_scalar("PoE_training/kl1_p_mod_loss", loss_kl1_p_mod_v, it)
-            writer.add_scalar("PoE_training/kl2_p_loss", loss_kl2_p_v, it)
-            writer.add_scalar("PoE_training/kl2_s_loss", loss_kl2_s_v, it)
-            writer.add_scalar("PoE_training/kl2_p_mod_loss", loss_kl2_p_mod_v, it)
-            writer.add_scalar("PoE_training/mmd_loss", loss_mmd_v, it)
-            writer.add_scalar("PoE_training/shared_loss", loss_shared_v, it)
-            writer.add_scalar("PoE_training/private_loss", loss_private_v, it)
-            writer.add_scalar("PoE_training/trls_rna_loss", loss_trls_rna_v, it)
-            writer.add_scalar("PoE_training/trls_msi_loss", loss_trls_msi_v, it)
-            writer.add_scalar("PoE_training/cos1_loss", loss_cos1_v, it)
-            writer.add_scalar("PoE_training/cos2_loss", loss_cos2_v, it)
-            ##############################################################################
-            writer.add_scalar("PoE_training/loss_batch1", loss_batch_1_v, it)
-            writer.add_scalar("PoE_training/loss_batch2", loss_batch_2_v, it)
-            ##############################################################################
-
+            log_loss(writer, loss_values, it, train=True)
             it += 1
 
         # Get epoch loss
-        epoch_loss = loss_value / len(train_loader.dataset.indices)
+        epoch_loss = loss_values["loss"] / len(train_loader.dataset.indices)
         epoch_hist["train_loss"].append(epoch_loss)
         train_ES(epoch_loss)
+
         # Eval
         if test_loader:
-            self.eval()
-            torch.save(self.state_dict(), "mvae_params.pt")
-            test_dict = self._test_model(test_loader, test_loader_pairs, device)
+            torch.save(model.state_dict(), "mvae_params.pt")
+
+            test_dict = test_model(model, test_loader, test_loader_pairs)
             test_loss = test_dict["loss"]
             epoch_hist["valid_loss"].append(test_loss)
             valid_ES(test_loss)
-            writer.add_scalar("PoE_training/test_loss", test_loss, epoch + 1)
-            writer.add_scalar(
-                "PoE_training/test_loss_shared", test_dict["loss_shared"], epoch + 1
-            )
-            writer.add_scalar(
-                "PoE_training/test_loss_batch_mod1",
-                test_dict["loss_batch_mod1"],
-                epoch + 1,
-            )
-            writer.add_scalar(
-                "PoE_training/test_loss_batch_mod2",
-                test_dict["loss_batch_mod2"],
-                epoch + 1,
-            )
+            log_loss(writer, test_dict, epoch + 1, train=False)
 
-            print(
-                "[Epoch %d] | loss: %.3f | loss_rna: %.3f |loss_msi: %.3f | test_loss: %.3f |"
-                % (
-                    epoch + 1,
-                    epoch_loss,
-                    loss_rec_rna_v / len(train_loader.dataset.indices),
-                    loss_rec_msi_v / len(train_loader.dataset.indices),
-                    test_loss,
-                ),
-                flush=True,
-            )
-            if valid_ES.early_stop or train_ES.early_stop:
-                # print('[Epoch %d] Early stopping' % (epoch+1), flush=True)
-                # break
-                print("", end="")
-            else:
-                print(
-                    "[Epoch %d] | loss: %.3f |" % (epoch + 1, epoch_loss),
-                    flush=True,
-                )
-                # if train_ES.early_stop:
-                # print('[Epoch %d] Early stopping' % (epoch+1), flush=True)
-                # break
     return epoch_hist
+
+
+def test_model(model, loader, loader_pairs) -> Dict[str, float]:
+    model.eval()
+    latents = []
+    mod_ids = []
+    batch_rna_ids = []
+    batch_msi_ids = []
+    loss_values = []
+    with torch.no_grad():
+        for data, data_pairs in tqdm(zip(loader, loader_pairs), total=len(loader)):
+            data = {k: v.to(model.device) for k, v in data.items()}
+            data_pairs = {k: v.to(model.device) for k, v in data_pairs.items()}
+
+            model_output: ModelOutputT = model.forward(data)
+            latents.append(extract_latent(model_output))
+            mod_ids.append(data["mod_id"].cpu().numpy())
+            batch_rna_ids.append(data["batch_rna"].cpu().numpy())
+            batch_msi_ids.append(data["batch_msi"].cpu().numpy())
+
+            loss = Loss(beta=model.params.beta, dropout=model.params.dropout)
+
+            model_output_pairs = model.forward(data_pairs)
+            loss.calculate_private(data, model_output)
+            loss.calculate_shared(data_pairs, model_output_pairs)
+            loss_values.append(loss.values)
+
+    last_loss = loss_values[-1]
+    loss_private, loss_shared, loss_rna_batch, loss_msi_batch = (
+        last_loss["private"],
+        last_loss["shared"],
+        last_loss["rna_batch"],
+        last_loss["msi_batch"],
+    )
+    return {
+        "loss": (loss_private + loss_shared) / len(loader),
+        "loss_private": loss_private / len(loader),
+        "loss_shared": loss_shared / len(loader),
+        "loss_rna_batch": loss_rna_batch / len(loader),
+        "loss_msi_batch": loss_msi_batch / len(loader),
+    }
+
+
+def predict(
+    model: MVAE,
+    adata,
+    batch_size=1024,
+    modality=None,
+    indices=None,
+    return_mean=False,
+    use_gpu=True,
+):
+    """
+    Project data into latent space. Inspired by SCVI.
+
+    Parameters
+    ----------
+    adata
+        scanpy single-cell dataset
+    indices
+        indices of the subset of cells to be encoded
+    return_mean
+        whether to use the mean of the multivariate gaussian or samples
+    """
+    model.to(model.device)
+    train_loader, train_loader_pairs = _anndata_loader(
+        adata,
+        mod1_obsm=mod1_obsm,
+        mod2_obsm=mod2_obsm,
+        batch_size=self.batch_size,
+        shuffle=False,
+    )
+
+    x1_poe = []
+    x2_poe = []
+    x1 = []
+    x2 = []
+    x1_2 = []
+    x2_1 = []
+    x1_batch_free = []
+    x2_batch_free = []
+    with torch.no_grad():
+        self.eval()
+        for tensors in tqdm(train_loader):
+            tensors = {k: v.to(dev) for k, v in tensors.items()}
+            model_output = self.forward(tensors)
+            x1_poe += [model_output["x1_poe"].detach().cpu()]
+            x2_poe += [model_output["x2_poe"].detach().cpu()]
+            x1 += [model_output["x1"].detach().cpu()]
+            x2 += [model_output["x2"].detach().cpu()]
+            x1_2 += [model_output["x1_2"].detach().cpu()]
+            x2_1 += [model_output["x2_1"].detach().cpu()]
+            x1_batch_free += [model_output["x1_batch_free"].detach().cpu()]
+            x2_batch_free += [model_output["x2_batch_free"].detach().cpu()]
+
+    return x1_poe, x2_poe, x1, x2, x1_2, x2_1, x1_batch_free, x2_batch_free
+
+
+@torch.no_grad()
+def to_latent(
+    self,
+    adata,
+    mod1_obsm=None,
+    mod2_obsm=None,
+    batch_size=1024,
+    modality=None,
+    indices=None,
+    return_mean=False,
+    use_gpu=True,
+):
+    """
+    Project data into latent space. Inspired by SCVI.
+
+    Parameters
+    ----------
+    adata
+        scanpy single-cell dataset
+    indices
+        indices of the subset of cells to be encoded
+    return_mean
+        whether to use the mean of the multivariate gaussian or samples
+    """
+    dev = torch.device("cuda") if use_gpu else torch.device("cpu")
+    self.to(dev)
+    #        sc_dl, _ = _anndata_loader(adata, mod1_obsm=mod1_obsm, mod2_obsm=mod2_obsm, batch_size=batch_size, shuffle=False)
+    # train_mdata, test_mdata = _anndata_splitter(adata, train_size=1)
+    train_loader, train_loader_pairs = _anndata_loader(
+        adata,
+        mod1_obsm=mod1_obsm,
+        mod2_obsm=mod2_obsm,
+        batch_size=self.batch_size,
+        shuffle=False,
+    )
+    #        test_loader, test_loader_pairs = _anndata_loader(test_mdata, mod1_obsm=mod1_obsm, mod2_obsm=mod2_obsm, batch_size=self.batch_size, shuffle=False)
+
+    latent_z = []
+    latent_z1_s = []
+    latent_z2_s = []
+    latent_z1_p = []
+    latent_z2_p = []
+    latent_z1_p_mod = []
+    latent_z2_p_mod = []
+    with torch.no_grad():
+        self.eval()
+        for tensors in tqdm(train_loader):
+            tensors = {k: v.to(dev) for k, v in tensors.items()}
+            model_output = self.forward(tensors)
+
+            latent_z += [model_output["z"].cpu()]
+            latent_z1_s += [model_output["z1_s"].cpu().numpy()]
+            latent_z2_s += [model_output["z2_s"].cpu().numpy()]
+            latent_z1_p += [model_output["z1_p"].cpu().numpy()]
+            latent_z2_p += [model_output["z2_p"].cpu().numpy()]
+            latent_z1_p_mod += [model_output["z1_p_mod"].cpu().numpy()]
+            latent_z2_p_mod += [model_output["z2_p_mod"].cpu().numpy()]
+
+    return (
+        latent_z,
+        latent_z1_s,
+        latent_z2_s,
+        latent_z1_p,
+        latent_z1_p_mod,
+        latent_z2_p,
+        latent_z2_p_mod,
+    )  # , train_mdata
