@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import List, TypedDict
+from typing import Any, List, Optional, TypedDict
 
 from src.latent import Latent
 from src.latent import LatentT
@@ -59,10 +59,22 @@ ModelInputT = TypedDict(
 class ModelInput:
     rna: torch.Tensor
     msi: torch.Tensor
-    mod_id: int
+    mod_id: Any
     batch_id1: torch.ByteTensor
     batch_id2: torch.ByteTensor
     extra_categorical_covs: List[int]
+
+
+ModalityInputT = TypedDict(
+    "ModalityInputT",
+    {
+        "x": torch.Tensor,
+        "mod_id": Any,
+        "batch_id": torch.ByteTensor,
+        "idxs": Any,
+        "cat_covs": Optional[torch.Tensor],
+    },
+)
 
 
 ModelOutputT = TypedDict(
@@ -71,6 +83,10 @@ ModelOutputT = TypedDict(
         "rna": "ModalityOutputT",
         "msi": "ModalityOutputT",
         "poe_latent": LatentT,
+        "rna_poe": torch.Tensor,
+        "msi_poe": torch.Tensor,
+        "rna_batch_free": torch.Tensor,
+        "msi_batch_free": torch.Tensor,
         "rna_msi_loss": torch.Tensor,
         "msi_rna_loss": torch.Tensor,
     },
@@ -79,10 +95,8 @@ ModelOutputT = TypedDict(
 ModalityOutputT = TypedDict(
     "ModalityOutputT",
     {
-        "y": torch.Tensor,
-        "y_batch_only": torch.Tensor,
-        "y_poe": torch.Tensor,
-        "y_batch_free": torch.Tensor,
+        "x": torch.Tensor,
+        "x_batch_only": torch.Tensor,
         "latent_p": LatentT,
         "latent_mod": LatentT,
         "latent_s": LatentT,
@@ -94,8 +108,6 @@ ModalityOutputT = TypedDict(
 class ModalityOutput:
     y: torch.Tensor
     y_batch_only: torch.Tensor
-    y_poe: torch.Tensor
-    y_batch_free: torch.Tensor
     latent_p: Latent
     latent_mod: Latent
     latent_s: Latent
@@ -105,8 +117,6 @@ class ModalityOutput:
         return cls(
             y=d["y"],
             y_batch_only=d["y_batch_only"],
-            y_poe=d["y_poe"],
-            y_batch_free=d["y_batch_free"],
             latent_p=Latent(**d["latent_p"]),
             latent_mod=Latent(**d["latent_mod"]),
             latent_s=Latent(**d["latent_s"]),

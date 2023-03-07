@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from src.dataloader import mudata_to_dataloader
 
@@ -109,7 +109,9 @@ def extract_y(model_output: ModelOutputT):
     }
 
 
-def train_mvae(model: MVAE, mdata: MuData, params=TrainParams()):
+def train_mvae(
+    model: MVAE, mdata: MuData, params=TrainParams()
+) -> Tuple[MVAE, Dict[str, Any]]:
     train_mdata, test_mdata = split_into_train_test(
         mdata,
         params.train_size,
@@ -130,6 +132,7 @@ def train_mvae(model: MVAE, mdata: MuData, params=TrainParams()):
     model.to(model.device)
 
     epoch_history = train(
+        model,
         train_loader,
         train_loader_pairs,
         test_loader,

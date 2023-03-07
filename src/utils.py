@@ -1,4 +1,5 @@
 from typing import List, Optional, Tuple
+from src.types import Modality
 import scanpy as sc
 import numpy as np
 from mudata import MuData
@@ -46,8 +47,9 @@ def split_into_train_test(
     train_mdata = mdata.copy()[train_idx, :]
     test_mdata = mdata.copy()[test_idx, :] if len(test_idx) != 0 else None
 
-    print(train_mdata)
-    print(test_mdata)
+    print(f"Train data size: {len(train_mdata.obs)}")
+    if test_mdata:
+        print(f"Test data size: {len(test_mdata.obs)}")
     return train_mdata, test_mdata
 
 
@@ -77,8 +79,8 @@ def _split_to_balance_modalities(mdata, train_size):
     """
     Splits mdata into train and test dataset so that cells represented only by first, only by second, or by both modalities are split proportionally.
     """
-    mdata.obs["mod_id"] = mdata.obsm[_CONSTANTS.MODALITY1_KEY].astype(int) + (
-        mdata.obsm[_CONSTANTS.MODALITY2_KEY].astype(int) * 2
+    mdata.obs["mod_id"] = mdata.obsm[Modality.rna.name].astype(int) + (
+        mdata.obsm[Modality.msi.name].astype(int) * 2
     )
     idxs = np.arange(mdata.shape[0])
     train_idx = []
