@@ -12,16 +12,19 @@ from src.types import (
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Variable
 
-LOSS = {
-    "mse": "src.loss.mse",
-    "bce": "src.loss.bce",
-}
+
+def get_loss_fun(loss_fun: str):
+    return {
+        "mse": mse,
+        "bce": bce,
+    }[loss_fun]
 
 
 def mse(pred: torch.Tensor, real: torch.Tensor, dropout=False) -> torch.Tensor:
-    if not dropout:
-        return F.mse_loss(pred, real, reduction="mean")
+    # if not dropout:
+    return F.mse_loss(pred, real, reduction="mean")
 
     dropout_mask = create_dropout_mask(real)
     return torch.sum((real - pred).pow(2) * dropout_mask) / torch.sum(dropout_mask)
@@ -45,7 +48,7 @@ def create_dropout_mask(real: torch.Tensor) -> torch.Tensor:
     dropout_mask = (real != 0).float()
     n_nonzero_features = dropout_mask.sum().int()
     mask_size = dropout_mask.size()
-    dropout_mask = dropout_mask.reshape(-1).clone()
+    dropout_mask = dropout_mask.reshape(-1)  # .clone()
     dropout_mask[torch.randperm(len(dropout_mask))[:n_nonzero_features]] = 1
     return dropout_mask.reshape(mask_size)
 
@@ -117,7 +120,7 @@ class Loss:
 
     def __init__(self, beta, loss_function="mse", dropout=False):
         self.beta = beta
-        self.loss_function = LOSS[loss_function]
+        self.loss_function = get_loss_fun(loss_function)
         self.dropout = dropout
 
     @property
@@ -127,22 +130,23 @@ class Loss:
             "private": self.private.item(),
             "shared": self.shared.item(),
             "mmd": self.mmd.item(),
-            "cos_rna": self.cos_rna.item(),
-            "cos_msi": self.cos_msi.item(),
+            "rna": self.rna.item(),
+            "msi": self.msi.item(),
+            "rna_batch": self.rna_batch.item(),
+            "msi_batch": self.msi_batch.item(),
+            "rna_kl_p": self.rna_kl_p.item(),
+            "rna_kl_mod": self.rna_kl_mod.item(),
+            "rna_kl_s": self.rna_kl_s.item(),
+            "msi_kl_p": self.msi_kl_p.item(),
+            "msi_kl_mod": self.msi_kl_mod.item(),
+            "msi_kl_s": self.msi_kl_s.item(),
             "translation_loss_msi": self.translation_loss_msi.item(),
             "translation_loss_rna": self.translation_loss_rna.item(),
             "recovered_rna_poe": self.recovered_rna_poe.item(),
             "recovered_msi_poe": self.recovered_msi_poe.item(),
-            "rna": self.rna.item(),
-            "rna_mse_batch": self.rna_mse_batch.item(),
-            "rna_kl_p": self.rna_kl_p.item(),
-            "rna_kl_mod": self.rna_kl_mod.item(),
-            "rna_kl_s": self.rna_kl_s.item(),
-            "msi": self.msi.item(),
-            "msi_mse_batch": self.msi_mse_batch.item(),
-            "msi_kl_p": self.msi_kl_p.item(),
-            "msi_kl_mod": self.msi_kl_mod.item(),
-            "msi_kl_s": self.msi_kl_s.item(),
+            "kl": self.kl.item(),
+            "cos_rna": self.cos_rna.item(),
+            "cos_msi": self.cos_msi.item(),
         }
 
     def backward(self) -> None:
@@ -164,14 +168,14 @@ class Loss:
         )
         (
             self.rna,
-            self.rna_mse_batch,
+            self.rna_batch,
             self.rna_kl_p,
             self.rna_kl_mod,
             self.rna_kl_s,
         ) = self._loss_mod(model_input[Modality.rna.name], rna_output, rna_idxs)
         (
             self.msi,
-            self.msi_mse_batch,
+            self.msi_batch,
             self.msi_kl_p,
             self.msi_kl_mod,
             self.msi_kl_s,
@@ -196,13 +200,13 @@ class Loss:
         kld_mod = modality_output.latent_mod.kld()
         kld_s = modality_output.latent_s.kld()
 
-        y_pred = modality_output.y[mod_idxs]
-        y_real = modality_input[mod_idxs]
+        x_pred = modality_output.x[mod_idxs]
+        x_real = torch.squeeze(modality_input[mod_idxs])
 
-        y_pred_batch = modality_output.y_batch_only
+        x_pred_batch = modality_output.x_batch_only
 
-        loss = self.loss_function(y_pred, y_real, self.dropout)
-        loss_batch = self.loss_function(y_pred_batch, y_real, self.dropout)
+        loss = self.loss_function(x_pred, x_real, self.dropout)
+        loss_batch = self.loss_function(x_pred_batch, x_real, self.dropout)
         return (
             torch.mean(loss),
             torch.mean(loss_batch),
@@ -232,27 +236,35 @@ class Loss:
 
         self.translation_loss_msi = torch.mean(
             self.loss_function(
-                model_output["rna_msi_loss"], msi_real, msi_idxs, dropout=self.dropout
+                model_output["rna_msi_loss"][msi_idxs],
+                msi_real[msi_idxs],
+                dropout=self.dropout,
             )
         )
         self.translation_loss_rna = torch.mean(
             self.loss_function(
-                model_output["msi_rna_loss"], rna_real, rna_idxs, dropout=self.dropout
+                model_output["msi_rna_loss"][rna_idxs],
+                rna_real[rna_idxs],
+                dropout=self.dropout,
             )
         )
 
         self.recovered_rna_poe = torch.mean(
             self.loss_function(
-                rna_output.y_poe, rna_real, rna_idxs, dropout=self.dropout
+                model_output["rna_poe"][rna_idxs],
+                rna_real[rna_idxs],
+                dropout=self.dropout,
             )
         )
         self.recovered_msi_poe = torch.mean(
             self.loss_function(
-                msi_output.y_poe, msi_real, msi_idxs, dropout=self.dropout
+                model_output["msi_poe"][msi_idxs],
+                msi_real[msi_idxs],
+                dropout=self.dropout,
             )
         )
 
-        kld = torch.mean(Latent(**model_output["poe_latent"]).kld())
+        self.kl = torch.mean(Latent(**model_output["poe_latent"]).kld())
 
         alphas = [
             1e-6,
@@ -276,7 +288,7 @@ class Loss:
             1e6,
         ]
 
-        alphas = Variable(torch.FloatTensor(alphas)).to(device=dev)
+        alphas = Variable(torch.FloatTensor(alphas)).to(device=torch.device("cuda"))
 
         self.mmd = mmd(rna_output.latent_s.z, msi_output.latent_s.z, alphas)
 
@@ -293,7 +305,7 @@ class Loss:
             + self.translation_loss_rna
             + self.recovered_rna_poe
             + self.recovered_msi_poe
-            + self.beta * kld
+            + self.beta * self.kl
         )
 
         self._loss = self.private + self.shared

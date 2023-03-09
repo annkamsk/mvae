@@ -1,5 +1,6 @@
+from dataclasses import asdict
 from typing import List, Tuple
-from src.types import Modality, ModelInputT, ObsModalityMembership
+from src.types import Modality, ModelInput, ModelInputT, ObsModalityMembership
 import pandas as pd
 import torch
 import numpy as np
@@ -8,7 +9,7 @@ from mudata import MuData
 from torch.utils.data import RandomSampler
 
 
-BATCH_KEY = "batch"
+BATCH_KEY = "batch_id"
 
 
 class MultimodalDataset(torch.utils.data.dataset.Dataset):
@@ -30,13 +31,15 @@ class MultimodalDataset(torch.utils.data.dataset.Dataset):
         batch2 = self._get_batch_data(index, Modality.msi)
         cat_covs = self.extra_categorical_covs[index]
 
-        return ModelInputT(
-            torch.Tensor(data1),
-            torch.Tensor(data2),
-            self.modality_membership[index],
-            torch.ByteTensor(batch1),
-            torch.ByteTensor(batch2),
-            cat_covs,
+        return asdict(
+            ModelInput(
+                torch.Tensor(data1),
+                torch.Tensor(data2),
+                self.modality_membership[index],
+                torch.ByteTensor(batch1),
+                torch.ByteTensor(batch2),
+                cat_covs,
+            )
         )
 
     def _is_item_in_modality(self, index, modality: Modality) -> bool:

@@ -32,6 +32,13 @@ class Latent:
             1.0 + self.logvar - self.mu.pow(2) - self.logvar.exp(),
         )
 
+    def to_dict(self) -> LatentT:
+        return {
+            "z": self.z,
+            "mu": self.mu,
+            "logvar": self.logvar,
+        }
+
 
 def prior_expert(size: List[int], use_cuda=False):
     """
@@ -58,7 +65,7 @@ def initialize_latent(size: List[int], use_cuda=False) -> Latent:
     return Latent(z, mu, logvar)
 
 
-def sample_latent(mu, logvar, use_cuda=False) -> torch.Tensor:
+def sample_latent(mu, logvar, use_cuda=True) -> torch.Tensor:
     std = logvar.mul(0.5).exp_()
     eps = torch.FloatTensor(std.size()).normal_()
     if use_cuda:

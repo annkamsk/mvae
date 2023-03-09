@@ -52,7 +52,7 @@ class EarlyStopping:
         self.mode = mode
 
     def __call__(self, val_loss):
-        score = -val_loss
+        score = val_loss
         if self._has_score_improved(score):
             self.best_score = score
             self.counter = 0
@@ -73,6 +73,8 @@ class EarlyStopping:
 
 
 def log_loss(writer, loss_values: Dict[str, float], iteration: int, train=True) -> None:
+    if writer is None:
+        print("train" if train else "test", loss_values["loss"])
     for key, value in loss_values.items():
         if train:
             writer.add_scalar(f"PoE_training/{key}", value, iteration)
@@ -84,7 +86,7 @@ def extract_latent(model_output: ModelOutputT):
     rna_output = ModalityOutput.from_dict(model_output["rna"])
     msi_output = ModalityOutput.from_dict(model_output["msi"])
     return {
-        "poe_latent": model_output["poe_latent"]["z"].cpu().numpy(),
+        "poe": model_output["poe_latent"]["z"].cpu(),
         "rna_p": rna_output.latent_p.z.cpu().numpy(),
         "rna_mod": rna_output.latent_mod.z.cpu().numpy(),
         "rna_s": rna_output.latent_s.z.cpu().numpy(),
@@ -98,14 +100,14 @@ def extract_y(model_output: ModelOutputT):
     rna_output = ModalityOutput.from_dict(model_output["rna"])
     msi_output = ModalityOutput.from_dict(model_output["msi"])
     return {
-        "rna_poe": rna_output.y_poe.detach().cpu(),
-        "msi_poe": msi_output.y_poe.detach().cpu(),
-        "rna": rna_output.y.detach().cpu(),
-        "msi": msi_output.y.detach().cpu(),
+        "rna_poe": model_output["rna_poe"].detach().cpu(),
+        "msi_poe": model_output["msi_poe"].detach().cpu(),
+        "rna": rna_output.x.detach().cpu(),
+        "msi": msi_output.x.detach().cpu(),
         "trans_loss_rna_msi": model_output["rna_msi_loss"].detach().cpu(),
         "trans_loss_msi_rna": model_output["msi_rna_loss"].detach().cpu(),
-        "rna_batch_free": rna_output.y_batch_free.detach().cpu(),
-        "msi_batch_free": msi_output.y_batch_free.detach().cpu(),
+        "rna_batch_free": model_output["rna_batch_free"].detach().cpu(),
+        "msi_batch_free": model_output["msi_batch_free"].detach().cpu(),
     }
 
 
@@ -152,9 +154,10 @@ def train(
     params: TrainParams = TrainParams(),
 ):
     # Initialize Tensorboard summary writer
-    writer = SummaryWriter(
-        "logs/mvae" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    )
+    writer = None
+    # writer = SummaryWriter(
+    #     "logs/mvae" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    # )
 
     epoch_hist = {"train_loss": [], "valid_loss": []}
     optimizer = optim.Adam(
@@ -175,7 +178,7 @@ def train(
             zip(train_loader, train_loader_pairs), total=len(train_loader)
         ):
             optimizer.zero_grad()
-            loss = Loss(model.params.beta, params.dropout)
+            loss = Loss(beta=model.params.beta, dropout=params.dropout)
 
             # Send input to device
             model_input: ModelInputT = {
@@ -209,7 +212,7 @@ def train(
         # Eval
         if test_loader:
             # torch.save(model.state_dict(), "mvae_params.pt")
-            test_dict = test_model(model, test_loader, test_loader_pairs)
+            test_dict = test_model(model, test_loader, test_loader_pairs, params)
             test_loss = test_dict["loss"]
             epoch_hist["valid_loss"].append(test_loss)
             valid_ES(test_loss)
@@ -223,9 +226,6 @@ def test_model(
 ) -> Dict[str, float]:
     model.eval()
     latents = []
-    mod_ids = []
-    batch_rna_ids = []
-    batch_msi_ids = []
     loss_values = []
     with torch.no_grad():
         for data, data_pairs in tqdm(zip(loader, loader_pairs), total=len(loader)):
@@ -234,10 +234,7 @@ def test_model(
 
             model_output: ModelOutputT = model.forward(data)
 
-            latents.append(extract_latent(model_output))
-            mod_ids.append(data["mod_id"].cpu().numpy())
-            batch_rna_ids.append(data["batch_rna"].cpu().numpy())
-            batch_msi_ids.append(data["batch_msi"].cpu().numpy())
+            # latents.append(extract_latent(model_output))
 
             loss = Loss(beta=model.params.beta, dropout=params.dropout)
 
@@ -273,14 +270,39 @@ def predict(
         batch_size=params.batch_size,
         shuffle=params.shuffle,
     )
-    y = []
+    rna_poe = []
+    msi_poe = []
+    rna = []
+    msi = []
+    trans_loss_rna_msi = []
+    trans_loss_msi_rna = []
+    rna_batch_free = []
+    msi_batch_free = []
+
     with torch.no_grad():
         model.eval()
         for tensors in tqdm(train_loader):
             tensors = {k: v.to(model.device) for k, v in tensors.items()}
             model_output: ModelOutputT = model.forward(tensors)
-            y.append(extract_y(model_output))
-    return y
+            y = extract_y(model_output)
+            rna_poe.append(y["rna_poe"])
+            msi_poe.append(y["msi_poe"])
+            rna.append(y["rna"])
+            msi.append(y["msi"])
+            trans_loss_rna_msi.append(y["trans_loss_rna_msi"])
+            trans_loss_msi_rna.append(y["trans_loss_msi_rna"])
+            rna_batch_free.append(y["rna_batch_free"])
+            msi_batch_free.append(y["msi_batch_free"])
+    return (
+        rna_poe,
+        msi_poe,
+        rna,
+        msi,
+        trans_loss_rna_msi,
+        trans_loss_msi_rna,
+        rna_batch_free,
+        msi_batch_free,
+    )
 
 
 def to_latent(
@@ -298,12 +320,26 @@ def to_latent(
         shuffle=params.shuffle,
     )
 
-    latent = []
+    poe = []
+    rna_p = []
+    msi_p = []
+    rna_mod = []
+    msi_mod = []
+    rna_s = []
+    msi_s = []
+
     with torch.no_grad():
         model.eval()
         for tensors in tqdm(train_loader):
             tensors = {k: v.to(model.device) for k, v in tensors.items()}
             model_output = model.forward(tensors)
-            latent.append(extract_latent(model_output))
+            latent = extract_latent(model_output)
+            poe.append(latent["poe"])
+            rna_p.append(latent["rna_p"])
+            msi_p.append(latent["msi_p"])
+            rna_mod.append(latent["rna_mod"])
+            msi_mod.append(latent["msi_mod"])
+            rna_s.append(latent["rna_s"])
+            msi_s.append(latent["msi_s"])
 
-    return latent
+    return poe, rna_p, msi_p, rna_mod, msi_mod, rna_s, msi_s

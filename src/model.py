@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from src.types import (
     Modality,
@@ -27,17 +27,26 @@ class MVAEParams:
     dropout: float = 0.1
     z_dropout: float = 0.3
     encode_covariates: bool = False
+    use_cuda = True
 
 
-class FullyConnectedLayers(nn.Sequential):
+class FullyConnectedLayers(nn.Module):
+    """
+    Adapted from scvi.nn.FCLayers:
+    https://docs.scvi-tools.org/en/stable/api/reference/scvi.nn.FCLayers.html
+    """
+
     def __init__(
         self,
-        n_in,
-        n_out,
-        n_layers=1,
-        n_hidden=128,
-        dropout_rate=0.1,
-        activation_fn=torch.nn.ReLU,
+        n_in: int,
+        n_out: int,
+        n_layers: int = 1,
+        n_hidden: int = 128,
+        dropout_rate: float = 0.1,
+        use_batch_norm: bool = True,
+        use_layer_norm: bool = False,
+        bias: bool = True,
+        activation_fn: nn.Module = nn.ReLU,
     ):
         """
         n_in: int - dimensionality of input
@@ -46,13 +55,31 @@ class FullyConnectedLayers(nn.Sequential):
         n_hidden: int - number of nodes per hidden layer
         dropout_rate: float - dropout rate to apply to each of the hidden layers
         """
-        dims = [n_in] + [n_hidden] * n_layers + [n_out]
+        super().__init__()
+        dims = [n_in] + [n_hidden] * (n_layers - 1) + [n_out]
         layers = []
         for layer_in, layer_out in zip(dims, dims[1:]):
-            layers.append(nn.Linear(layer_in, layer_out))
-            layers.append(activation_fn())
-            layers.append(nn.Dropout(dropout_rate))
-        super().__init__(*layers)
+            layer = []
+            layer.append(nn.Linear(layer_in, layer_out, bias=bias))
+            if use_batch_norm:
+                layer.append(nn.BatchNorm1d(layer_out, momentum=0.01, eps=0.001))
+            if use_layer_norm:
+                layers.append(nn.LayerNorm(layer_out, elementwise_affine=False))
+            layer.append(activation_fn())
+            layer.append(nn.Dropout(dropout_rate))
+            layers.append(nn.Sequential(*layer))
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for layers in self.layers:
+            for layer in layers:
+                if isinstance(layer, nn.BatchNorm1d):
+                    if x.dim() == 3:
+                        x = torch.cat(
+                            [(layer(slice_x)).unsqueeze(0) for slice_x in x], dim=0
+                        )
+                x = layer(x)
+        return x
 
 
 class SamplingLayers(nn.Module):
@@ -78,13 +105,13 @@ class ModalityLayers(nn.Module):
         self.n_batch = n_batch
         self.params = params
         self.shared_sampling = SamplingLayers(
-            params.n_hidden, params.z_dim, params.dropout
+            params.n_hidden, params.z_dim, params.z_dropout
         )
         self.batch_sampling = SamplingLayers(
-            params.n_hidden, params.z_dim * n_batch, params.dropout
+            params.n_hidden, params.z_dim * n_batch, params.z_dropout
         )
         self.private_sampling = SamplingLayers(
-            params.n_hidden, params.z_dim, params.dropout
+            params.n_hidden, params.z_dim, params.z_dropout
         )
         self.encoder = FullyConnectedLayers(
             n_in=n_in,
@@ -106,17 +133,17 @@ class ModalityLayers(nn.Module):
             torch.nn.Linear(params.n_hidden, n_in), torch.nn.ReLU()
         )
 
-    def forward(self, input: ModalityInputT) -> Dict:
+    def forward(self, input: ModalityInputT) -> ModalityOutputT:
         latent_p, latent_mod, latent_s = self.encode(input)
 
         batch_only = self.decode(latent_p.z, input["batch_id"], input["cat_covs"])
         X = self.decode(latent_p.z + latent_mod.z, input["batch_id"], input["cat_covs"])
         return dict(
-            X=X,
-            latent_p=asdict(latent_p),
-            latent_mod=asdict(latent_mod),
-            latent_s=asdict(latent_s),
-            batch_only=asdict(batch_only),
+            x=X,
+            latent_p=latent_p.to_dict(),
+            latent_mod=latent_mod.to_dict(),
+            latent_s=latent_s.to_dict(),
+            x_batch_only=batch_only,
         )
 
     def encode(
@@ -126,23 +153,18 @@ class ModalityLayers(nn.Module):
         """
         Encode data in latent space (Inference step).
         """
-        if input["extra_categorical_covs"] and self.params.encode_covariates:
-            categorical_input = torch.split(input["extra_categorical_covs"], 1, dim=1)
-        else:
-            categorical_input = tuple()
+        batch_id = input["batch_id"][input["mod_id"], :]
+        X = torch.squeeze(input["x"][input["mod_id"], :, :])
+        y = self.encoder(X)
 
-        batch_id = input["batch_id"][input["idxs"], :]
-        X = torch.squeeze(input["x"][input["idxs"], :, :])
-        y = self.encoder(X, batch_id, *categorical_input)
-
-        latent_size = [input["idxs"].shape[0], self.params.z_dim]
+        latent_size = [input["mod_id"].shape[0], self.params.z_dim]
         latent_p = initialize_latent(latent_size, use_cuda=self.params.use_cuda)
         latent_mod = initialize_latent(latent_size, use_cuda=self.params.use_cuda)
         latent_s = initialize_latent(latent_size, use_cuda=self.params.use_cuda)
 
         post_latent = self.sample_latent(y, batch_id)
         for prior, post in zip([latent_p, latent_mod, latent_s], post_latent):
-            prior.update(post, input["idxs"])
+            prior.update(post, input["mod_id"])
         return [latent_p, latent_mod, latent_s]
 
     def sample_latent(self, y, batch_id) -> Tuple[Latent, Latent, Latent]:
@@ -179,12 +201,7 @@ class ModalityLayers(nn.Module):
         batch_id: torch.Tensor,
         cat_covs: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if cat_covs is not None:
-            categorical_input = torch.split(cat_covs, 1, dim=1)
-        else:
-            categorical_input = tuple()
-
-        X = self.decoder(z, batch_id, *categorical_input)
+        X = self.decoder(z)
         return self.final(X)
 
 
@@ -294,9 +311,9 @@ class MVAE(torch.nn.Module):
             input["extra_categorical_covs"],
         )
         return ModelOutputT(
-            rna=asdict(rna_output),
-            msi=asdict(msi_output),
-            poe=asdict(poe),
+            rna=rna_output.to_dict(),
+            msi=msi_output.to_dict(),
+            poe_latent=poe.to_dict(),
             rna_poe=rna_poe,
             rna_batch_free=rna_batch_free,
             msi_poe=msi_poe,
@@ -308,13 +325,14 @@ class MVAE(torch.nn.Module):
     def encode_poe(
         self, size: List[int], rna_latent_s: Latent, msi_latent_s: Latent
     ) -> Latent:
-        mu, logvar = initialize_latent(size, use_cuda=self.params.use_cuda)
+        latent = initialize_latent(size, use_cuda=self.params.use_cuda)
         mu = torch.cat(
-            (mu, rna_latent_s.mu.unsqueeze(0), msi_latent_s.mu.unsqueeze(0)), dim=0
+            (latent.mu, rna_latent_s.mu.unsqueeze(0), msi_latent_s.mu.unsqueeze(0)),
+            dim=0,
         )
         logvar = torch.cat(
             (
-                logvar,
+                latent.logvar,
                 rna_latent_s.logvar.unsqueeze(0),
                 msi_latent_s.logvar.unsqueeze(0),
             ),

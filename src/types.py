@@ -106,8 +106,8 @@ ModalityOutputT = TypedDict(
 
 @dataclass
 class ModalityOutput:
-    y: torch.Tensor
-    y_batch_only: torch.Tensor
+    x: torch.Tensor
+    x_batch_only: torch.Tensor
     latent_p: Latent
     latent_mod: Latent
     latent_s: Latent
@@ -115,9 +115,18 @@ class ModalityOutput:
     @classmethod
     def from_dict(cls, d: ModalityOutputT) -> "ModalityOutput":
         return cls(
-            y=d["y"],
-            y_batch_only=d["y_batch_only"],
+            x=d["x"],
+            x_batch_only=d["x_batch_only"],
             latent_p=Latent(**d["latent_p"]),
             latent_mod=Latent(**d["latent_mod"]),
             latent_s=Latent(**d["latent_s"]),
         )
+
+    def to_dict(self) -> ModalityOutputT:
+        return {
+            "x": self.x,
+            "x_batch_only": self.x_batch_only,
+            "latent_p": self.latent_p.to_dict(),
+            "latent_mod": self.latent_mod.to_dict(),
+            "latent_s": self.latent_s.to_dict(),
+        }
