@@ -51,30 +51,32 @@ class EarlyStopping:
         self.delta = delta
         self.mode = mode
 
-    def __call__(self, val_loss):
+    def __call__(self, val_loss: float, epoch: int):
         score = val_loss
         if self._has_score_improved(score):
             self.best_score = score
             self.counter = 0
 
             if self.verbose:
-                print(f"EarlyStopping: {self.mode} loss improved to {score}")
+                print(
+                    f"EarlyStopping (epoch: {epoch}): {self.mode} loss improved to {score}",
+                    flush=True,
+                )
             return
 
         self.counter += 1
         if self.counter >= self.patience:
             print(
-                f"EarlyStopping: {self.mode} loss hasn't improved: {score}. Stopping."
+                f"EarlyStopping (epoch: {epoch}): {self.mode} loss hasn't improved: {score}. Stopping.",
+                flush=True,
             )
             self.early_stop = True
 
     def _has_score_improved(self, current_score) -> bool:
-        return self.best_score is None or current_score > self.best_score - self.delta
+        return self.best_score is None or current_score < self.best_score - self.delta
 
 
 def log_loss(writer, loss_values: Dict[str, float], iteration: int, train=True) -> None:
-    if writer is None:
-        print("train" if train else "test", loss_values["loss"])
     for key, value in loss_values.items():
         if train:
             writer.add_scalar(f"PoE_training/{key}", value, iteration)
@@ -141,8 +143,8 @@ def train_mvae(
         test_loader_pairs,
         params,
     )
-    model.eval()
-    return model, epoch_history
+    torch.save(model.state_dict(), "mvae_params.pt")
+    return epoch_history
 
 
 def train(
@@ -155,9 +157,9 @@ def train(
 ):
     # Initialize Tensorboard summary writer
     writer = None
-    # writer = SummaryWriter(
-    #     "logs/mvae" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    # )
+    writer = SummaryWriter(
+        "logs/mvae" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    )
 
     epoch_hist = {"train_loss": [], "valid_loss": []}
     optimizer = optim.Adam(
@@ -174,6 +176,7 @@ def train(
     for epoch in range(params.n_epochs):
         torch.set_num_threads(16)
         model.train()
+        epoch_loss = 0
         for model_input, model_input_pairs in tqdm(
             zip(train_loader, train_loader_pairs), total=len(train_loader)
         ):
@@ -197,6 +200,7 @@ def train(
             loss.calculate_shared(model_input_pairs, model_output_pairs)
 
             loss_values = loss.values
+            epoch_loss += loss_values["loss"]
 
             loss.backward()
             optimizer.step()
@@ -205,19 +209,25 @@ def train(
             it += 1
 
         # Get epoch loss
-        epoch_loss = loss_values["loss"] / len(train_loader.dataset.indices)
+        epoch_loss = epoch_loss / len(train_loader.dataset.indices)
         epoch_hist["train_loss"].append(epoch_loss)
-        train_ES(epoch_loss)
+
+        train_ES(epoch_loss, epoch + 1)
+        if not test_loader and train_ES.early_stop:
+            # Use train early stop only if no test set is provided
+            break
 
         # Eval
         if test_loader:
             # torch.save(model.state_dict(), "mvae_params.pt")
-            test_dict = test_model(model, test_loader, test_loader_pairs, params)
-            test_loss = test_dict["loss"]
+            test_loss = test_model(model, test_loader, test_loader_pairs, params)
             epoch_hist["valid_loss"].append(test_loss)
-            valid_ES(test_loss)
-            log_loss(writer, test_dict, epoch + 1, train=False)
+            valid_ES(test_loss, epoch + 1)
+            if valid_ES.early_stop:
+                break
+            log_loss(writer, {"Test loss": test_loss}, epoch + 1, train=False)
 
+    writer.close()
     return epoch_hist
 
 
@@ -226,7 +236,8 @@ def test_model(
 ) -> Dict[str, float]:
     model.eval()
     latents = []
-    loss_values = []
+    loss_val = 0
+    i = 0
     with torch.no_grad():
         for data, data_pairs in tqdm(zip(loader, loader_pairs), total=len(loader)):
             data = {k: v.to(model.device) for k, v in data.items()}
@@ -241,22 +252,10 @@ def test_model(
             model_output_pairs = model.forward(data_pairs)
             loss.calculate_private(data, model_output)
             loss.calculate_shared(data_pairs, model_output_pairs)
-            loss_values.append(loss.values)
+            loss_val += loss.values["loss"]
+            i += 1
 
-    last_loss = loss_values[-1]
-    loss_private, loss_shared, loss_rna_batch, loss_msi_batch = (
-        last_loss["private"],
-        last_loss["shared"],
-        last_loss["rna_batch"],
-        last_loss["msi_batch"],
-    )
-    return {
-        "loss": (loss_private + loss_shared) / len(loader),
-        "loss_private": loss_private / len(loader),
-        "loss_shared": loss_shared / len(loader),
-        "loss_rna_batch": loss_rna_batch / len(loader),
-        "loss_msi_batch": loss_msi_batch / len(loader),
-    }
+    return loss_val / i
 
 
 def predict(

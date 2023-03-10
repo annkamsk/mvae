@@ -54,7 +54,7 @@ def prior_expert(size: List[int], use_cuda=False):
     return mu, logvar
 
 
-def initialize_latent(size: List[int], use_cuda=False) -> Latent:
+def initialize_latent(size: List[int], use_cuda=True) -> Latent:
     """
     Initializes arrays of mu, logvar, and z.
     n_samples - number of samples
@@ -66,6 +66,9 @@ def initialize_latent(size: List[int], use_cuda=False) -> Latent:
 
 
 def sample_latent(mu, logvar, use_cuda=True) -> torch.Tensor:
+    """
+    Sample latent space with reparametrization trick. First convert to std, sample normal(0,1) and get Z.
+    """
     std = logvar.mul(0.5).exp_()
     eps = torch.FloatTensor(std.size()).normal_()
     if use_cuda:

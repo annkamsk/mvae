@@ -31,16 +31,14 @@ class MultimodalDataset(torch.utils.data.dataset.Dataset):
         batch2 = self._get_batch_data(index, Modality.msi)
         cat_covs = self.extra_categorical_covs[index]
 
-        return asdict(
-            ModelInput(
-                torch.Tensor(data1),
-                torch.Tensor(data2),
-                self.modality_membership[index],
-                torch.ByteTensor(batch1),
-                torch.ByteTensor(batch2),
-                cat_covs,
-            )
-        )
+        return ModelInput(
+            torch.Tensor(data1),
+            torch.Tensor(data2),
+            self.modality_membership[index],
+            torch.ByteTensor(batch1),
+            torch.ByteTensor(batch2),
+            cat_covs,
+        ).to_dict()
 
     def _is_item_in_modality(self, index, modality: Modality) -> bool:
         if modality == Modality.rna:

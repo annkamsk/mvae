@@ -10,7 +10,7 @@ from src.types import (
     ModelOutputT,
 )
 
-from src.latent import Latent, initialize_latent, sample_latent
+from src.latent import Latent, initialize_latent, prior_expert, sample_latent
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -27,7 +27,7 @@ class MVAEParams:
     dropout: float = 0.1
     z_dropout: float = 0.3
     encode_covariates: bool = False
-    use_cuda = True
+    use_cuda: bool = True
 
 
 class FullyConnectedLayers(nn.Module):
@@ -136,14 +136,12 @@ class ModalityLayers(nn.Module):
     def forward(self, input: ModalityInputT) -> ModalityOutputT:
         latent_p, latent_mod, latent_s = self.encode(input)
 
-        batch_only = self.decode(latent_p.z, input["batch_id"], input["cat_covs"])
         X = self.decode(latent_p.z + latent_mod.z, input["batch_id"], input["cat_covs"])
         return dict(
             x=X,
             latent_p=latent_p.to_dict(),
             latent_mod=latent_mod.to_dict(),
             latent_s=latent_s.to_dict(),
-            x_batch_only=batch_only,
         )
 
     def encode(
@@ -183,8 +181,12 @@ class ModalityLayers(nn.Module):
                 logvar_p.reshape((-1, self.params.z_dim, self.n_batch)) * batch_encoding
             ).sum(-1)
         else:
-            mu_p = torch.zeros_like(mu_s).to(self.params.device)
-            logvar_p = torch.zeros_like(logvar_s).to(self.params.device)
+            mu_p = torch.zeros_like(mu_s).to(
+                torch.device("cuda" if self.params.use_cuda else "cpu")
+            )
+            logvar_p = torch.zeros_like(logvar_s).to(
+                torch.device("cuda" if self.params.use_cuda else "cpu")
+            )
 
         z_p = sample_latent(mu_p, logvar_p)
         z_p_mod = sample_latent(mu_p_mod, logvar_p_mod)
@@ -301,15 +303,16 @@ class MVAE(torch.nn.Module):
 
         # Translation losses
         rna_msi_loss = self.msi.decode(
-            rna_output.latent_p.z + msi_output.latent_s.z,
+            msi_output.latent_p.z + rna_output.latent_s.z,
             input["batch_id2"],
             input["extra_categorical_covs"],
         )
         msi_rna_loss = self.rna.decode(
-            msi_output.latent_p.z + rna_output.latent_s.z,
+            rna_output.latent_p.z + msi_output.latent_s.z,
             input["batch_id1"],
             input["extra_categorical_covs"],
         )
+
         return ModelOutputT(
             rna=rna_output.to_dict(),
             msi=msi_output.to_dict(),
@@ -325,14 +328,14 @@ class MVAE(torch.nn.Module):
     def encode_poe(
         self, size: List[int], rna_latent_s: Latent, msi_latent_s: Latent
     ) -> Latent:
-        latent = initialize_latent(size, use_cuda=self.params.use_cuda)
+        mu, logvar = prior_expert(size, use_cuda=self.params.use_cuda)
         mu = torch.cat(
-            (latent.mu, rna_latent_s.mu.unsqueeze(0), msi_latent_s.mu.unsqueeze(0)),
+            (mu, rna_latent_s.mu.unsqueeze(0), msi_latent_s.mu.unsqueeze(0)),
             dim=0,
         )
         logvar = torch.cat(
             (
-                latent.logvar,
+                logvar,
                 rna_latent_s.logvar.unsqueeze(0),
                 msi_latent_s.logvar.unsqueeze(0),
             ),
@@ -361,7 +364,7 @@ class MVAE(torch.nn.Module):
         msi_poe = self.msi.decode(
             msi_output.latent_p.z + latent_poe.z, batch_id2, cat_covs
         )
-        msi_batch_only = self.msi.decode(
+        msi_batch_free = self.msi.decode(
             latent_poe.z + msi_output.latent_mod.z, batch_id2, cat_covs
         )
-        return rna_poe, rna_batch_free, msi_poe, msi_batch_only
+        return rna_poe, rna_batch_free, msi_poe, msi_batch_free
