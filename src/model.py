@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from src.constants import BATCH_N_KEY
+
+from src.utils import setup_mudata
+
 from src.types import (
     Modality,
     ModalityInputT,
@@ -245,8 +249,10 @@ class MVAE(torch.nn.Module):
         self.params = params
         self.device = "cuda" if use_cuda else "cpu"
 
-        self.n_batch_mod1 = mdata.mod[Modality.rna.name].uns["n_batch"]
-        self.n_batch_mod2 = mdata.mod[Modality.msi.name].uns["n_batch"]
+        setup_mudata(mdata)
+
+        self.n_batch_mod1 = mdata.mod[Modality.rna.name].uns[BATCH_N_KEY]
+        self.n_batch_mod2 = mdata.mod[Modality.msi.name].uns[BATCH_N_KEY]
 
         print("N batches for mod1: ", str(self.n_batch_mod1))
         print("N batches for mod2: ", str(self.n_batch_mod2))
