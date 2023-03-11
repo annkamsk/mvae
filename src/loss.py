@@ -48,7 +48,7 @@ def create_dropout_mask(real: torch.Tensor) -> torch.Tensor:
     dropout_mask = (real != 0).float()
     n_nonzero_features = dropout_mask.sum().int()
     mask_size = dropout_mask.size()
-    dropout_mask = dropout_mask.reshape(-1)
+    dropout_mask = dropout_mask.reshape(-1).clone()
     dropout_mask[torch.randperm(len(dropout_mask))[:n_nonzero_features]] = 1
     return dropout_mask.reshape(mask_size)
 
@@ -114,7 +114,7 @@ class Loss:
     loss_function: Callable = mse
     dropout: bool = False
 
-    def __init__(self, beta, loss_function="mse", dropout=False):
+    def __init__(self, beta, loss_function="mse", dropout=True):
         self.beta = beta
         self.loss_function = get_loss_fun(loss_function)
         self.dropout = dropout

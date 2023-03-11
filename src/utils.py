@@ -1,31 +1,11 @@
 from typing import List, Optional, Tuple
+
+import pandas as pd
+
+from src.constants import BATCH_KEY, BATCH_N_KEY, CAT_COVS_KEY, MOD_KEY
 from src.types import Modality
-import scanpy as sc
 import numpy as np
 from mudata import MuData
-
-
-def plot_emb_mod(pred, mod, batch):
-    pred = np.concatenate(pred)
-    mod = np.concatenate(mod).flatten()
-    batch = np.concatenate(batch).flatten()
-
-    ad = sc.AnnData(pred, obs=pd.DataFrame({"mod": mod, "batch": batch}))
-    ad.obs["mod"] = ad.obs["mod"].astype("category")
-    ad.obs["batch"] = ad.obs["batch"].astype("category")
-    sc.pp.neighbors(ad)
-    sc.tl.umap(ad)
-    sc.pl.umap(ad, color=["mod", "batch"])
-
-
-def plot_emb_batch(pred, batch):
-    pred = np.concatenate(pred)
-    batch = np.concatenate(batch).flatten()
-    ad = sc.AnnData(pred, obs=pd.DataFrame({"batch": batch}))
-    ad.obs["batch"] = ad.obs["batch"].astype("category")
-    sc.pp.neighbors(ad)
-    sc.tl.umap(ad)
-    sc.pl.umap(ad, color=["batch"])
 
 
 def split_into_train_test(
@@ -66,8 +46,8 @@ def _split_indices(
 
     if batch_split is not None:
         train_batches, test_batches = batch_split
-        train_idx = np.where(mdata.obs.batch.isin(train_batches))[0]
-        test_idx = np.where(mdata.obs.batch.isin(test_batches))[0]
+        train_idx = np.where(mdata.obs.batch_id.isin(train_batches))[0]
+        test_idx = np.where(mdata.obs.batch_id.isin(test_batches))[0]
         np.random.shuffle(train_idx)
         np.random.shuffle(test_idx)
         return train_idx, test_idx
@@ -79,17 +59,43 @@ def _split_to_balance_modalities(mdata, train_size):
     """
     Splits mdata into train and test dataset so that cells represented only by first, only by second, or by both modalities are split proportionally.
     """
-    mdata.obs["mod_id"] = mdata.obsm[Modality.rna.name].astype(int) + (
-        mdata.obsm[Modality.msi.name].astype(int) * 2
-    )
     idxs = np.arange(mdata.shape[0])
     train_idx = []
     test_idx = []
     for m in mdata.obs.mod_id.unique():
-        idxs_m = idxs[mdata.obs["mod_id"] == m]
+        idxs_m = idxs[mdata.obs.mod_id == m]
         n = len(idxs_m)
         n_train = int(n * train_size)
         perm_idx_m = np.random.permutation(n)
         train_idx += list(idxs_m[perm_idx_m[:n_train]])
         test_idx += list(idxs_m[perm_idx_m[n_train:]])
     return train_idx, test_idx
+
+
+def setup_mudata(mdata: MuData):
+    if not CAT_COVS_KEY in mdata.obs.columns:
+        mdata.obs[CAT_COVS_KEY] = 0
+
+    if not BATCH_KEY in mdata.obs.columns:
+        mdata.obs[BATCH_KEY] = pd.Categorical(
+            pd.factorize(mdata.obs.loc[:, "sample"])[0]
+        )
+
+        for modality in Modality:
+            mdata.mod[modality.name].obs[BATCH_KEY] = pd.Categorical(
+                pd.factorize(mdata.obs.loc[:, "sample"])[0]
+            )
+            mdata.mod[modality.name].uns[BATCH_N_KEY] = len(
+                mdata.mod[modality.name].obs[BATCH_KEY].cat.categories
+            )
+
+    if not MOD_KEY in mdata.obs.columns:
+        mdata.obs[MOD_KEY] = mdata.obsm[Modality.rna.name].astype(int) + (
+            mdata.obsm[Modality.msi.name].astype(int) * 2
+        )
+        mdata.mod[Modality.rna.name].obs[MOD_KEY] = mdata[
+            mdata.obsm[Modality.rna.name] == True
+        ].obs[MOD_KEY]
+        mdata.mod[Modality.msi.name].obs[MOD_KEY] = mdata[
+            mdata.obsm[Modality.msi.name] == True
+        ].obs[MOD_KEY]

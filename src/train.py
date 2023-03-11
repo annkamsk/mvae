@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from src.dataloader import mudata_to_dataloader
 
-from src.utils import split_into_train_test
+from src.utils import setup_mudata, split_into_train_test
 
 from src.loss import Loss
 from mudata import MuData
@@ -24,14 +24,14 @@ class TrainParams:
     n_epochs: int = 500
     train_size: float = 1.0  # proportion of training data, between 0 and 1
     batch_size: int = 128
-    batch_split = None
-    shuffle = True
+    shuffle: bool = True
+    batch_split: Any = None
     leave_sample_out: Optional[str] = None  # name of sample to leave out in training
-    train_patience = 20
-    test_patience = 20
-    rna_loss = "mse"
-    msi_loss = "bce"
-    dropout = True
+    train_patience: int = 20
+    test_patience: int = 20
+    rna_loss: str = "mse"
+    msi_loss: str = "mse"
+    dropout: bool = True
 
 
 class EarlyStopping:
@@ -116,6 +116,7 @@ def extract_y(model_output: ModelOutputT):
 def train_mvae(
     model: MVAE, mdata: MuData, params=TrainParams()
 ) -> Tuple[MVAE, Dict[str, Any]]:
+    setup_mudata(mdata)
     train_mdata, test_mdata = split_into_train_test(
         mdata,
         params.train_size,
@@ -235,7 +236,6 @@ def test_model(
     model: MVAE, loader, loader_pairs, params: TrainParams
 ) -> Dict[str, float]:
     model.eval()
-    latents = []
     loss_val = 0
     i = 0
     with torch.no_grad():
@@ -244,8 +244,6 @@ def test_model(
             data_pairs = {k: v.to(model.device) for k, v in data_pairs.items()}
 
             model_output: ModelOutputT = model.forward(data)
-
-            # latents.append(extract_latent(model_output))
 
             loss = Loss(beta=model.params.beta, dropout=params.dropout)
 
@@ -261,7 +259,7 @@ def test_model(
 def predict(
     model: MVAE,
     mudata: MuData,
-    params=TrainParams(batch_size=1024),
+    params: TrainParams,
 ):
     model.to(model.device)
     train_loader, _ = mudata_to_dataloader(
@@ -307,7 +305,7 @@ def predict(
 def to_latent(
     model: MVAE,
     mudata: MuData,
-    params=TrainParams(batch_size=1024),
+    params: TrainParams,
 ):
     """
     Projects data into latent space. Inspired by SCVI.

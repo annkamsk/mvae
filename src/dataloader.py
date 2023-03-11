@@ -1,7 +1,7 @@
-from dataclasses import asdict
-from typing import List, Tuple
+from typing import Any, Tuple
+
+from src.constants import BATCH_KEY
 from src.types import Modality, ModelInput, ModelInputT, ObsModalityMembership
-import pandas as pd
 import torch
 import numpy as np
 from scipy import sparse
@@ -9,18 +9,15 @@ from mudata import MuData
 from torch.utils.data import RandomSampler
 
 
-BATCH_KEY = "batch_id"
-
-
 class MultimodalDataset(torch.utils.data.dataset.Dataset):
     def __init__(
         self,
         mdata: MuData,
-        modality_membership: pd.Series,
-        extra_categorical_covs: List[int] = [],
+        mod_ids: Any,
+        extra_categorical_covs: Any,
     ):
         self.dataset = mdata
-        self.modality_membership = torch.Tensor(modality_membership)
+        self.mod_ids = torch.Tensor(mod_ids)
         self.extra_categorical_covs = torch.Tensor(extra_categorical_covs)
         self.indices = np.arange(mdata.n_obs)
 
@@ -34,7 +31,7 @@ class MultimodalDataset(torch.utils.data.dataset.Dataset):
         return ModelInput(
             torch.Tensor(data1),
             torch.Tensor(data2),
-            self.modality_membership[index],
+            self.mod_ids[index],
             torch.ByteTensor(batch1),
             torch.ByteTensor(batch2),
             cat_covs,
@@ -42,12 +39,12 @@ class MultimodalDataset(torch.utils.data.dataset.Dataset):
 
     def _is_item_in_modality(self, index, modality: Modality) -> bool:
         if modality == Modality.rna:
-            return self.modality_membership[index] in [
+            return self.mod_ids[index] in [
                 ObsModalityMembership.ONLY_MOD1,
                 ObsModalityMembership.PAIRED,
             ]
         else:
-            return self.modality_membership[index] in [
+            return self.mod_ids[index] in [
                 ObsModalityMembership.ONLY_MOD2,
                 ObsModalityMembership.PAIRED,
             ]
@@ -74,12 +71,9 @@ class MultimodalDataset(torch.utils.data.dataset.Dataset):
 def mudata_to_dataloader(
     mdata: MuData, batch_size: int, shuffle=False
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-    modality_membership = ObsModalityMembership.from_mudata(
-        mdata, Modality.rna.name, Modality.msi.name
-    )
     dataset = MultimodalDataset(
         mdata,
-        modality_membership,
+        mdata.obs.mod_id.values,
         mdata.obs.extra_categorical_covs.values.astype(int),
     )
     sc_dataloader = torch.utils.data.DataLoader(
@@ -89,14 +83,12 @@ def mudata_to_dataloader(
         num_workers=8,
     )
 
-    paired_obs_idx = modality_membership[
-        modality_membership == ObsModalityMembership.PAIRED
-    ].index
-    paired_obs = mdata[paired_obs_idx]
     paired_dataset = MultimodalDataset(
-        paired_obs,
-        modality_membership[paired_obs_idx].values,
-        paired_obs.obs.extra_categorical_covs.values.astype(int),
+        mdata[mdata.obs.mod_id == ObsModalityMembership.PAIRED, :],
+        mdata[mdata.obs.mod_id == ObsModalityMembership.PAIRED, :].obs.mod_id.values,
+        mdata[mdata.obs.mod_id == ObsModalityMembership.PAIRED, :]
+        .obs[BATCH_KEY]
+        .values.astype(int),
     )
     sampler = RandomSampler(
         paired_dataset, replacement=True, num_samples=mdata.shape[0]
