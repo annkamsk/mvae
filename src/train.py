@@ -202,9 +202,7 @@ def train(
             loss.calculate_private(model_input, model_output)
             loss.calculate_shared(model_input_pairs, model_output_pairs)
 
-            corr = harmony_correct(model_input_pairs, model_output_pairs)
-
-            return corr
+            corr = harmony_correct(model_input_pairs, model_output_pairs, model.device)
 
             loss_values = loss.values
             epoch_loss += loss_values["loss"]
