@@ -1,6 +1,8 @@
 from typing import Any, Tuple
 
-from src.constants import BATCH_KEY
+from src.utils import setup_mudata
+
+from src.constants import BATCH_KEY, MOD_KEY
 from src.types import Modality, ModelInput, ModelInputT, ObsModalityMembership
 import torch
 import numpy as np
@@ -71,6 +73,7 @@ class MultimodalDataset(torch.utils.data.dataset.Dataset):
 def mudata_to_dataloader(
     mdata: MuData, batch_size: int, shuffle=False
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+    setup_mudata(mdata)
     dataset = MultimodalDataset(
         mdata,
         mdata.obs.mod_id.values,
@@ -86,9 +89,9 @@ def mudata_to_dataloader(
     paired_dataset = MultimodalDataset(
         mdata[mdata.obs.mod_id == ObsModalityMembership.PAIRED, :],
         mdata[mdata.obs.mod_id == ObsModalityMembership.PAIRED, :].obs.mod_id.values,
-        mdata[mdata.obs.mod_id == ObsModalityMembership.PAIRED, :]
-        .obs[BATCH_KEY]
-        .values.astype(int),
+        mdata[
+            mdata.obs.mod_id == ObsModalityMembership.PAIRED, :
+        ].obs.extra_categorical_covs.values.astype(int),
     )
     sampler = RandomSampler(
         paired_dataset, replacement=True, num_samples=mdata.shape[0]

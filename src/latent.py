@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, TypedDict
+from typing import List, Tuple, TypedDict
 
 import torch
 from torch.autograd import Variable
@@ -54,7 +54,7 @@ def prior_expert(size: List[int], use_cuda=False):
     return mu, logvar
 
 
-def initialize_latent(size: List[int], use_cuda=True) -> Latent:
+def initialize_latent(size: Tuple[int], use_cuda=True) -> Latent:
     """
     Initializes arrays of mu, logvar, and z.
     n_samples - number of samples
