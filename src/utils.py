@@ -100,12 +100,3 @@ def setup_mudata(mdata: MuData):
         mdata.mod[Modality.msi.name].obs[MOD_KEY] = mdata[
             mdata.obsm[Modality.msi.name] == True
         ].obs[MOD_KEY]
-
-
-def one_hot_tensor(batch_id, n_batch, device_type):
-    ids = batch_id.to(dtype=torch.long).view(-1, 1)
-    n_row = batch_id.size(dim=0)
-    n_col = n_batch
-    Phi = torch.zeros(n_row, n_col, dtype=torch.float, device=device_type)
-    Phi.scatter_(dim=1, index=ids, value=1.0)
-    return Phi
