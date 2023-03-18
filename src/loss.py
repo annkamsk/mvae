@@ -1,5 +1,9 @@
 from typing import Callable, Dict
 
+from src.lisi import compute_lisi
+
+from src.harmony import harmonize
+
 from src.latent import Latent
 
 from src.types import (
@@ -10,7 +14,6 @@ from src.types import (
     ObsModalityMembership,
 )
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
@@ -88,10 +91,11 @@ def pairwise_distance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.transpose(output, 0, 1)
 
 
-class Loss:
-    loss = None
+class LossCalculator:
     private = None
     shared = None
+    batch_integration = None
+
     mmd = None
     rna = None
     msi = None
@@ -120,9 +124,12 @@ class Loss:
         self.dropout = dropout
 
     @property
+    def total_loss(self) -> torch.Tensor:
+        return self.private + self.shared + self.batch_integration
+
+    @property
     def values(self) -> Dict[str, float]:
         return {
-            "loss": self.loss.item(),
             "private": self.private.item(),
             "shared": self.shared.item(),
             "mmd": self.mmd.item(),
@@ -140,9 +147,6 @@ class Loss:
             "recovered_msi_poe": self.recovered_msi_poe.item(),
             "kl": self.kl.item(),
         }
-
-    def backward(self) -> None:
-        self.loss.backward()
 
     def calculate_private(
         self,
@@ -286,4 +290,19 @@ class Loss:
             + self.kl
         )
 
-        self.loss = self.private + self.shared
+    def calculate_batch_integration_loss(
+        self,
+        input: ModelInputT,
+        output: ModelOutputT,
+        perplexity: float = 30,
+        device="cuda",
+    ):
+        """
+        Tries to correct the POE latent space for batch effects with Harmony and calculates loss
+        as LISI (Local Inverse Simpson Index) score.
+        """
+        batch_id = input["batch_id1"]
+        poe = output["poe_latent"]["z"]
+
+        poe_corrected = harmonize(poe, batch_id, device_type=device)
+        self.batch_integration = compute_lisi(poe_corrected, batch_id, perplexity)

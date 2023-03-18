@@ -3,6 +3,7 @@ Methods defined in this file are adapted from the following repository:
 https://github.com/lilab-bcb/harmony-pytorch
 """
 
+from typing import Tuple
 import torch
 
 import numpy as np
@@ -24,11 +25,9 @@ def harmonize(
     block_proportion: float = 0.05,
     theta: float = 2.0,
     tau: int = 0,
-    correction_method: str = "fast",
-    random_state: int = 0,
+    correction_method: str = "original",
     device_type: str = "cpu",
-    n_jobs: int = -1,
-    verbose: bool = True,
+    verbose: bool = False,
 ) -> torch.Tensor:
     """
     Parameters
@@ -73,16 +72,10 @@ def harmonize(
     correction_method: ``string``, optional, default: ``fast``
         Choose which method for the correction step: ``original`` for original method, ``fast`` for improved method. By default, use improved method.
 
-    random_state: ``int``, optional, default: ``0``
-        Random seed for reproducing results.
-
     device_type: ``str``, optional, default: ``cpu``
         If ``cuda``, use GPU.
 
-    n_jobs: ``int``, optional, default ``-1``
-        How many CPU threads to use. By default, use all physical cores. If 'use_gpu' is True, this option only affects the KMeans step.
-
-    verbose: ``bool``, optional, default ``True``
+    verbose: ``bool``, optional, default ``False``
         If ``True``, print verbose output.
 
     Returns
@@ -101,7 +94,7 @@ def harmonize(
 
     n_batches = N_b.size(dim=0)
 
-    Phi = one_hot(batch_ids)
+    Phi = one_hot(batch_ids.long()).squeeze().float()
 
     if n_clusters is None:
         n_clusters = int(min(100, n_cells / 30))
@@ -118,8 +111,6 @@ def harmonize(
     assert 0 < block_proportion <= 1
     assert correction_method in ["fast", "original"]
 
-    np.random.seed(random_state)
-
     R, E, O, objectives_harmony = initialize_centroids(
         Z_norm,
         n_clusters,
@@ -127,9 +118,6 @@ def harmonize(
         Pr_b,
         Phi,
         theta,
-        None,
-        device_type,
-        n_jobs,
     )
 
     if verbose:
@@ -143,13 +131,11 @@ def harmonize(
             R,
             E,
             O,
-            n_clusters,
             theta,
             tol_clustering,
             max_iter_clustering,
             sigma,
             block_proportion,
-            device_type,
         )
         objectives_harmony.append(objective)
 
@@ -182,26 +168,9 @@ def initialize_centroids(
     Pr_b,
     Phi,
     theta,
-    random_state,
-    device_type,
-    n_init=10,
 ):
-    kmeans_params = {
-        "n_clusters": n_clusters,
-        "init": "k-means++",
-        "n_init": n_init,
-        "random_state": random_state,
-        "max_iter": 25,
-    }
-
-    kmeans = KMeans(**kmeans_params)
-
-    if device_type == "cpu":
-        kmeans.fit(Z_norm)
-    else:
-        kmeans.fit(Z_norm.cpu())
-
-    Y = torch.tensor(kmeans.cluster_centers_, dtype=torch.float, device=device_type)
+    # get centroids from kmeans clustering
+    _, Y = kmeans(Z_norm, n_clusters)
     Y_norm = normalize(Y, p=2, dim=1)
 
     # assign cluster probabilities
@@ -214,6 +183,41 @@ def initialize_centroids(
 
     objective_harmony = compute_objective(Y_norm, Z_norm, R, theta, sigma, O, E)
     return R, E, O, [objective_harmony]
+
+
+def kmeans(X, n_clusters, tol=1e-4) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Calculates the K-Means clustering for X.
+    Returns the cluster assignments per row and the cluster centers.
+
+    Code adapted from https://github.com/overshiki/kmeans_pytorch.
+    """
+    indices = np.random.choice(len(X), n_clusters)
+    initial_state = X[indices]
+
+    while True:
+        dist = torch.cdist(X, initial_state)
+
+        # the closest cluster center for each row
+        closest_clusters = torch.argmin(dist, dim=1)
+
+        initial_state_pre = initial_state.clone()
+
+        for cluster_idx in range(n_clusters):
+            rows_with_cluster_idx = torch.nonzero(
+                closest_clusters == cluster_idx
+            ).squeeze()
+            row_with_cluster = torch.index_select(X, 0, rows_with_cluster_idx)
+            initial_state[cluster_idx] = row_with_cluster.mean(dim=0)
+
+        center_shift = torch.sum(
+            torch.sqrt(torch.sum((initial_state - initial_state_pre) ** 2, dim=1))
+        )
+
+        if center_shift**2 < tol:
+            break
+
+    return closest_clusters, initial_state
 
 
 def clustering(

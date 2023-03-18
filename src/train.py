@@ -2,13 +2,11 @@ from dataclasses import dataclass
 import datetime
 from typing import Any, Dict, Optional, Tuple
 
-from src.batch_correct import harmony_correct
-
 from src.dataloader import mudata_to_dataloader
 
 from src.utils import setup_mudata, split_into_train_test
 
-from src.loss import Loss
+from src.loss import LossCalculator
 from mudata import MuData
 from src.types import ModalityOutput, ModelInputT, ModelOutputT
 
@@ -146,7 +144,10 @@ def train_mvae(
         test_loader_pairs,
         params,
     )
-    torch.save(model.state_dict(), "mvae_params.pt")
+    torch.save(
+        model.state_dict(),
+        f"mvae_params_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.pt",
+    )
     return epoch_history
 
 
@@ -184,7 +185,9 @@ def train(
             zip(train_loader, train_loader_pairs), total=len(train_loader)
         ):
             optimizer.zero_grad()
-            loss = Loss(beta=model.params.beta, dropout=params.dropout)
+            loss_calculator = LossCalculator(
+                beta=model.params.beta, dropout=params.dropout
+            )
 
             # Send input to device
             model_input: ModelInputT = {
@@ -199,19 +202,25 @@ def train(
             model_output: ModelOutputT = model.forward(model_input)
             model_output_pairs: ModelOutputT = model.forward(model_input_pairs)
 
-            loss.calculate_private(model_input, model_output)
-            loss.calculate_shared(model_input_pairs, model_output_pairs)
+            loss_calculator.calculate_private(model_input, model_output)
+            loss_calculator.calculate_shared(model_input_pairs, model_output_pairs)
+            loss_calculator.calculate_batch_integration_loss(
+                model_input_pairs, model_output_pairs, device=model.device
+            )
 
-            corr = harmony_correct(model_input_pairs, model_output_pairs, model.device)
-            return corr, model_output_pairs
-
-            loss_values = loss.values
-            epoch_loss += loss_values["loss"]
+            loss = loss_calculator.total_loss
+            loss_value = loss.item()
+            epoch_loss += loss_value
 
             loss.backward()
             optimizer.step()
 
-            log_loss(writer, loss_values, it, train=True)
+            log_loss(
+                writer,
+                {"total_loss": loss_value, **loss_calculator.values},
+                it,
+                train=True,
+            )
             it += 1
 
         # Get epoch loss

@@ -1,26 +1,6 @@
 from typing import Tuple
-from src.types import ModelInputT, ModelOutputT
-from src.harmony import harmonize
 
 import torch
-
-
-def batch_integration_loss(
-    input: ModelInputT,
-    output: ModelOutputT,
-    perplexity: float = 30,
-    tol: float = 1e-5,
-    device="cuda",
-):
-    """
-    Tries to correct the POE latent space for batch effects with Harmony and calculates loss
-    as LISI (Local Inverse Simpson Index) score.
-    """
-    batch_id = input["batch_id1"]
-    poe = output["poe_latent"]["z"]
-
-    poe_corrected = harmonize(poe, batch_id, device_type=device)
-    return compute_lisi(poe_corrected, batch_id, perplexity, device)
 
 
 def compute_lisi(
@@ -29,8 +9,8 @@ def compute_lisi(
     perplexity: float = 30,
 ):
     """
-    Compute the Local Inverse Simpson Index (LISI). LISI is a measure
-    of the local batch diversity of a dataset.
+    Compute the mean of Local Inverse Simpson Index (LISI) for all cells.
+    LISI is a measure of the local batch diversity of a dataset.
     For batch_ids including N batches, LISI returns values between 1 and N:
     LISI close to 1 means item is surrounded by neighbors from 1 batch,
     LISI close to N means item is surrounded by neighbors from all N batches.
@@ -39,7 +19,7 @@ def compute_lisi(
     distances, indices = nearest_neighbors(X, perplexity * 3)
 
     n_cells = distances.size(dim=0)
-    simpson = torch.zeros(n_cells)
+    simpson = torch.zeros(n_cells, device=X.device)
 
     for i in range(n_cells):
         D_i = distances[i, :]
@@ -47,7 +27,7 @@ def compute_lisi(
         P_i, H = convert_distance_to_probability(D_i, perplexity)
         simpson[i] = compute_simpson(P_i, H, batch_ids, Id_i)
 
-    return simpson
+    return torch.mean(simpson)
 
 
 def nearest_neighbors(
@@ -80,7 +60,11 @@ def convert_distance_to_probability(
     betamin = None
     betamax = None
 
-    logU = torch.log(torch.tensor([perplexity]))
+    logU = torch.log(
+        torch.tensor(
+            [perplexity], dtype=torch.float, device=Di.device, requires_grad=True
+        )
+    )
 
     H, P = compute_entropy(Di, beta)
     Hdiff = H - logU
@@ -113,7 +97,7 @@ def convert_distance_to_probability(
 
 
 def compute_entropy(D: torch.Tensor, beta):
-    P = torch.exp(-D * beta)
+    P = torch.exp(-D.clone() * beta)
     sumP = torch.sum(P)
 
     H = torch.log(sumP) + beta * torch.sum(D * P) / sumP
@@ -127,17 +111,20 @@ def compute_simpson(
     H: torch.Tensor,
     batch_ids: torch.Tensor,
     indices: torch.Tensor,
+    device="cuda",
 ) -> torch.Tensor:
+    """
+    Computes Inverse Simpson Index = 1 / Σ p(b), where b is batch
+    """
     if H == 0:
         return torch.tensor(-1)
 
-    # Inverse Simpson Index = 1 / Σ p(b) where b is batch
-    neighbors_batches = batch_ids[indices]
+    neighbors_batches = batch_ids[indices].long().squeeze()
 
     # for each batch, compute the sum of the probabilities of the neighbors
-    unique_batches = neighbors_batches.unique(dim=0)
-    sumP = torch.zeros_like(unique_batches, dtype=torch.float).scatter_add_(
-        0, neighbors_batches, P
-    )
+    unique_batches = neighbors_batches.unique(dim=0).squeeze()
+    sumP = torch.zeros_like(
+        unique_batches, dtype=torch.float, device=device
+    ).scatter_add_(0, neighbors_batches, P)
 
     return 1 / torch.sum(sumP**2)
