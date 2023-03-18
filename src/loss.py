@@ -132,6 +132,7 @@ class LossCalculator:
         return {
             "private": self.private.item(),
             "shared": self.shared.item(),
+            "batch_integration": self.batch_integration.item(),
             "mmd": self.mmd.item(),
             "rna": self.rna.item(),
             "msi": self.msi.item(),
@@ -304,5 +305,5 @@ class LossCalculator:
         batch_id = input["batch_id1"]
         poe = output["poe_latent"]["z"]
 
-        poe_corrected = harmonize(poe, batch_id, device_type=device)
-        self.batch_integration = compute_lisi(poe_corrected, batch_id, perplexity)
+        # poe_corrected = harmonize(poe, batch_id, device_type=device)
+        self.batch_integration = 1 / compute_lisi(poe, batch_id, perplexity)

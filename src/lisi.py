@@ -33,7 +33,7 @@ def compute_lisi(
 def nearest_neighbors(
     X: torch.Tensor, n_neighbors: int = 5
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    pairwise_distances = torch.cdist(X, X)
+    pairwise_distances = torch.cdist(X, X.clone())
 
     # take n_neighbors + 1 because the closest will be the point itself
     distances, indices = pairwise_distances.topk(n_neighbors + 1, largest=False)
@@ -122,7 +122,8 @@ def compute_simpson(
     neighbors_batches = batch_ids[indices].long().squeeze()
 
     # for each batch, compute the sum of the probabilities of the neighbors
-    unique_batches = neighbors_batches.unique(dim=0).squeeze()
+    unique_batches = torch.arange(0, 16, device=device)
+
     sumP = torch.zeros_like(
         unique_batches, dtype=torch.float, device=device
     ).scatter_add_(0, neighbors_batches, P)
