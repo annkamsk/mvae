@@ -1,21 +1,6 @@
-from typing import Callable, Dict
-
-from src.lisi import compute_lisi
-
-from src.harmony import harmonize
-
-from src.latent import Latent
-
-from src.types import (
-    Modality,
-    ModalityOutput,
-    ModelInputT,
-    ModelOutputT,
-    ObsModalityMembership,
-)
 import torch
 import torch.nn.functional as F
-from torch.autograd import Variable
+from typing import Tuple
 
 
 def get_loss_fun(loss_fun: str):
@@ -91,219 +76,129 @@ def pairwise_distance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.transpose(output, 0, 1)
 
 
-class LossCalculator:
-    private = None
-    shared = None
-    batch_integration = None
+def compute_lisi(
+    X: torch.Tensor,
+    batch_ids: torch.Tensor,
+    perplexity: float = 30,
+):
+    """
+    Compute the mean of Local Inverse Simpson Index (LISI) for all cells.
+    LISI is a measure of the local batch diversity of a dataset.
+    For batch_ids including N batches, LISI returns values between 1 and N:
+    LISI close to 1 means item is surrounded by neighbors from 1 batch,
+    LISI close to N means item is surrounded by neighbors from all N batches.
+    """
+    # We need at least 3 * n_neigbhors to compute the perplexity
+    distances, indices = nearest_neighbors(X, perplexity * 3)
 
-    mmd = None
-    rna = None
-    msi = None
-    rna_kl_p = None
-    rna_kl_mod = None
-    rna_kl_s = None
-    msi_kl_p = None
-    msi_kl_mod = None
-    msi_kl_s = None
+    n_cells = distances.size(dim=0)
+    simpson = torch.zeros(n_cells, device=X.device)
 
-    loss_rna_msi = None
-    loss_msi_rna = None
+    for i in range(n_cells):
+        D_i = distances[i, :]
+        Id_i = indices[i, :]
+        P_i, H = convert_distance_to_probability(D_i, perplexity)
+        simpson[i] = compute_simpson(P_i, H, batch_ids, Id_i)
 
-    recovered_rna_poe = None
-    recovered_msi_poe = None
+    return torch.mean(simpson)
 
-    kl = None
 
-    beta: float
-    loss_function: Callable = mse
-    dropout: bool = False
+def nearest_neighbors(
+    X: torch.Tensor, n_neighbors: int = 5
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    pairwise_distances = torch.cdist(X, X.clone())
 
-    def __init__(self, beta, loss_function="mse", dropout=True):
-        self.beta = beta
-        self.loss_function = get_loss_fun(loss_function)
-        self.dropout = dropout
+    # take n_neighbors + 1 because the closest will be the point itself
+    distances, indices = pairwise_distances.topk(n_neighbors + 1, largest=False)
 
-    @property
-    def total_loss(self) -> torch.Tensor:
-        return self.private + self.shared + self.batch_integration
+    # skip the first one in each row because it is the point itself
+    return distances[:, 1:], indices[:, 1:]
 
-    @property
-    def values(self) -> Dict[str, float]:
-        return {
-            "private": self.private.item(),
-            "shared": self.shared.item(),
-            "batch_integration": self.batch_integration.item(),
-            "mmd": self.mmd.item(),
-            "rna": self.rna.item(),
-            "msi": self.msi.item(),
-            "rna_kl_p": self.rna_kl_p.item(),
-            "rna_kl_mod": self.rna_kl_mod.item(),
-            "rna_kl_s": self.rna_kl_s.item(),
-            "msi_kl_p": self.msi_kl_p.item(),
-            "msi_kl_mod": self.msi_kl_mod.item(),
-            "msi_kl_s": self.msi_kl_s.item(),
-            "loss_rna_msi": self.loss_rna_msi.item(),
-            "loss_msi_rna": self.loss_msi_rna.item(),
-            "recovered_rna_poe": self.recovered_rna_poe.item(),
-            "recovered_msi_poe": self.recovered_msi_poe.item(),
-            "kl": self.kl.item(),
-        }
 
-    def calculate_private(
-        self,
-        model_input: ModelInputT,
-        model_output: ModelOutputT,
-    ) -> None:
-        mod = model_input["mod_id"]
-        rna_output = ModalityOutput.from_dict(model_output[Modality.rna.name])
-        msi_output = ModalityOutput.from_dict(model_output[Modality.msi.name])
-        rna_idxs = (mod == ObsModalityMembership.ONLY_MOD1) | (
-            mod == ObsModalityMembership.PAIRED
+def convert_distance_to_probability(
+    Di: torch.Tensor, perplexity: float, beta: float = 1.0, tol: float = 1e-5
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Computes Gaussian kernel-based distribution of a cell neighborhood by
+    converting distances into conditional probabilities P_ij.
+
+    P_ij = probability that point x_i would pick x_j as a neighbor if neighbors were picked in proportion to their probability density under a Gaussian centered at x_i
+
+    Performs binary search for probability P_ij for given i that's within tolerance tol of perplexity.
+    Perplexity (how well the probability distribution predicts the distances) is a hyperparameter defined
+    as 2^H(P_ij) where H is the Shannon entropy of the distribution.
+
+    Theory described in: https://www.researchgate.net/publication/228339739_Viualizing_data_using_t-SNE
+    """
+    betamin = None
+    betamax = None
+
+    logU = torch.log(
+        torch.tensor(
+            [perplexity], dtype=torch.float, device=Di.device, requires_grad=True
         )
-        msi_idxs = (mod == ObsModalityMembership.ONLY_MOD2) | (
-            mod == ObsModalityMembership.PAIRED
-        )
-        (
-            self.rna,
-            self.rna_kl_p,
-            self.rna_kl_mod,
-            self.rna_kl_s,
-        ) = self._loss_mod(model_input[Modality.rna.name], rna_output, rna_idxs)
-        (
-            self.msi,
-            self.msi_kl_p,
-            self.msi_kl_mod,
-            self.msi_kl_s,
-        ) = self._loss_mod(model_input[Modality.msi.name], msi_output, msi_idxs)
+    )
 
-        self.private = (
-            self.rna
-            + self.msi
-            + (self.rna_kl_p + self.rna_kl_s + self.msi_kl_p + self.msi_kl_s)
-        )
+    H, P = compute_entropy(Di, beta)
+    Hdiff = H - logU
 
-    def _loss_mod(
-        self,
-        modality_input,
-        modality_output: ModalityOutput,
-        mod_idxs,
-    ):
-        """
-        Calculates private loss components (MSE and KL) for one modality.
-        """
-        kld_p = modality_output.latent_p.kld()
-        kld_mod = modality_output.latent_mod.kld()
-        kld_s = modality_output.latent_s.kld()
+    n_tries = 50
+    for _ in range(n_tries):
+        # Is the perplexity within tolerance
+        if abs(Hdiff) < tol:
+            break
 
-        x_pred = modality_output.x[mod_idxs]
-        x_real = torch.squeeze(modality_input[mod_idxs])
+        # If not, increase or decrease precision
+        if Hdiff > 0:
+            betamin = beta
+            if betamax is None:
+                beta *= 2
+            else:
+                beta = (beta + betamax) / 2
+        else:
+            betamax = beta
+            if betamin is None:
+                beta /= 2
+            else:
+                beta = (beta + betamin) / 2
 
-        loss = self.loss_function(x_pred, x_real, self.dropout)
-        return (
-            torch.mean(loss),
-            self.beta * torch.mean(kld_p),
-            self.beta * torch.mean(kld_mod),
-            self.beta * torch.mean(kld_s),
-        )
+        # Recompute the values
+        H, P = compute_entropy(Di, beta)
+        Hdiff = H - logU
 
-    def calculate_shared(
-        self, model_input: ModelInputT, model_output: ModelOutputT
-    ) -> None:
-        """
-        Initializes Maximum Mean Discrepancy(MMD) between model_input and output.
-        - Gretton, Arthur, et al. "A Kernel Two-Sample Test". 2012.
-        """
-        rna_output = ModalityOutput.from_dict(model_output[Modality.rna.name])
-        msi_output = ModalityOutput.from_dict(model_output[Modality.msi.name])
-        mod = model_input["mod_id"]
-        rna_idxs = (mod == ObsModalityMembership.ONLY_MOD1) | (
-            mod == ObsModalityMembership.PAIRED
-        )
-        msi_idxs = (mod == ObsModalityMembership.ONLY_MOD2) | (
-            mod == ObsModalityMembership.PAIRED
-        )
-        rna_real = torch.squeeze(model_input[Modality.rna.name])
-        msi_real = torch.squeeze(model_input[Modality.msi.name])
+    return P, H
 
-        self.loss_rna_msi = torch.mean(
-            self.loss_function(
-                model_output["rna_msi_loss"][msi_idxs],
-                msi_real[msi_idxs],
-                dropout=self.dropout,
-            )
-        )
-        self.loss_msi_rna = torch.mean(
-            self.loss_function(
-                model_output["msi_rna_loss"][rna_idxs],
-                rna_real[rna_idxs],
-                dropout=self.dropout,
-            )
-        )
 
-        self.recovered_rna_poe = torch.mean(
-            self.loss_function(
-                model_output["rna_poe"][rna_idxs],
-                rna_real[rna_idxs],
-                dropout=self.dropout,
-            )
-        )
-        self.recovered_msi_poe = torch.mean(
-            self.loss_function(
-                model_output["msi_poe"][msi_idxs],
-                msi_real[msi_idxs],
-                dropout=self.dropout,
-            )
-        )
+def compute_entropy(D: torch.Tensor, beta):
+    P = torch.exp(-D.clone() * beta)
+    sumP = torch.sum(P)
 
-        self.kl = self.beta * torch.mean(Latent(**model_output["poe_latent"]).kld())
+    H = torch.log(sumP) + beta * torch.sum(D * P) / sumP
+    P = P / sumP
 
-        alphas = [
-            1e-6,
-            1e-5,
-            1e-4,
-            1e-3,
-            1e-2,
-            1e-1,
-            1,
-            5,
-            10,
-            15,
-            20,
-            25,
-            30,
-            35,
-            100,
-            1e3,
-            1e4,
-            1e5,
-            1e6,
-        ]
+    return H, P
 
-        alphas = Variable(torch.FloatTensor(alphas)).to(device=torch.device("cuda"))
 
-        self.mmd = mmd(rna_output.latent_s.z, msi_output.latent_s.z, alphas)
+def compute_simpson(
+    P: torch.Tensor,
+    H: torch.Tensor,
+    batch_ids: torch.Tensor,
+    indices: torch.Tensor,
+    device="cuda",
+) -> torch.Tensor:
+    """
+    Computes Inverse Simpson Index = 1 / Σ p(b), where b is batch
+    """
+    if H == 0:
+        return torch.tensor(-1)
 
-        self.shared = (
-            self.loss_rna_msi
-            + self.loss_msi_rna
-            + self.recovered_rna_poe
-            + self.recovered_msi_poe
-            + self.kl
-        )
+    neighbors_batches = batch_ids[indices].long().squeeze()
 
-    def calculate_batch_integration_loss(
-        self,
-        input: ModelInputT,
-        output: ModelOutputT,
-        perplexity: float = 30,
-        device="cuda",
-    ):
-        """
-        Tries to correct the POE latent space for batch effects with Harmony and calculates loss
-        as LISI (Local Inverse Simpson Index) score.
-        """
-        batch_id = input["batch_id1"]
-        poe = output["poe_latent"]["z"]
+    # for each batch, compute the sum of the probabilities of the neighbors
+    unique_batches = torch.arange(0, 16, device=device)
 
-        # poe_corrected = harmonize(poe, batch_id, device_type=device)
-        self.batch_integration = 1 / compute_lisi(poe, batch_id, perplexity)
+    sumP = torch.zeros_like(
+        unique_batches, dtype=torch.float, device=device
+    ).scatter_add_(0, neighbors_batches, P)
+
+    return 1 / torch.sum(sumP**2)

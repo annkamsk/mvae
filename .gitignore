@@ -1,5 +1,6 @@
 .ipynb_checkpoints/
-src/__pycache__
+**/__pycache__
 data/
 logs/
 mvae_params.pt
+mvae_params/

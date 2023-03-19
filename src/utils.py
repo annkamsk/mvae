@@ -1,102 +1,54 @@
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
-import pandas as pd
-import torch
-
-from src.constants import BATCH_KEY, BATCH_N_KEY, CAT_COVS_KEY, MOD_KEY
-from src.types import Modality
 import numpy as np
-from mudata import MuData
 
 
-def split_into_train_test(
-    mdata: MuData,
-    train_size: float,
-    sample: Optional[str] = None,
-    batch_split: Optional[Tuple[List[str], List[str]]] = None,
-) -> Tuple[MuData, Optional[MuData]]:
+class EarlyStopping:
     """
-    Splits MuData object into a training and test set. Test proportion is 1-train_size.
-    If sample is set to a sample name then leave-sample-out method will be used.
-    Else if batch_split is set then batch split method will be used.
-    Else random split method will be used.
+    Stops the training if the loss doesn't improve by more than delta after a given patience.
     """
-    assert 0 < train_size <= 1, "train_size must be between 0 and 1"
 
-    train_idx, test_idx = _split_indices(mdata, train_size, sample, batch_split)
+    def __init__(
+        self, patience: int = 7, verbose=False, delta: float = 0, mode="train"
+    ):
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.val_loss_min = np.Inf
+        self.delta = delta
+        self.mode = mode
 
-    train_mdata = mdata.copy()[train_idx, :]
-    test_mdata = mdata.copy()[test_idx, :] if len(test_idx) != 0 else None
+    def __call__(self, val_loss: float, epoch: int):
+        score = val_loss
+        if self._has_score_improved(score):
+            self.best_score = score
+            self.counter = 0
 
-    print(f"Train data size: {len(train_mdata.obs)}")
-    if test_mdata:
-        print(f"Test data size: {len(test_mdata.obs)}")
-    return train_mdata, test_mdata
+            if self.verbose:
+                print(
+                    f"EarlyStopping (epoch: {epoch}): {self.mode} loss improved to {score}",
+                    flush=True,
+                )
+            return
 
-
-def _split_indices(
-    mdata: MuData,
-    train_size: float,
-    sample: Optional[str],
-    batch_split: Optional[Tuple[List[str], List[str]]],
-):
-    if sample is not None:
-        train_idx = mdata.obs["sample"] != sample
-        test_idx = mdata.obs["sample"] == sample
-        return train_idx, test_idx
-
-    if batch_split is not None:
-        train_batches, test_batches = batch_split
-        train_idx = np.where(mdata.obs.batch_id.isin(train_batches))[0]
-        test_idx = np.where(mdata.obs.batch_id.isin(test_batches))[0]
-        np.random.shuffle(train_idx)
-        np.random.shuffle(test_idx)
-        return train_idx, test_idx
-
-    return _split_to_balance_modalities(mdata, train_size)
-
-
-def _split_to_balance_modalities(mdata, train_size):
-    """
-    Splits mdata into train and test dataset so that cells represented only by first, only by second, or by both modalities are split proportionally.
-    """
-    idxs = np.arange(mdata.shape[0])
-    train_idx = []
-    test_idx = []
-    for m in mdata.obs.mod_id.unique():
-        idxs_m = idxs[mdata.obs.mod_id == m]
-        n = len(idxs_m)
-        n_train = int(n * train_size)
-        perm_idx_m = np.random.permutation(n)
-        train_idx += list(idxs_m[perm_idx_m[:n_train]])
-        test_idx += list(idxs_m[perm_idx_m[n_train:]])
-    return train_idx, test_idx
-
-
-def setup_mudata(mdata: MuData):
-    if not CAT_COVS_KEY in mdata.obs.columns:
-        mdata.obs[CAT_COVS_KEY] = 0
-
-    if not BATCH_KEY in mdata.obs.columns:
-        mdata.obs[BATCH_KEY] = pd.Categorical(
-            pd.factorize(mdata.obs.loc[:, "sample"])[0]
-        )
-
-        for modality in Modality:
-            mdata.mod[modality.name].obs[BATCH_KEY] = pd.Categorical(
-                pd.factorize(mdata.obs.loc[:, "sample"])[0]
+        self.counter += 1
+        if self.counter >= self.patience:
+            print(
+                f"EarlyStopping (epoch: {epoch}): {self.mode} loss hasn't improved: {score}. Stopping.",
+                flush=True,
             )
-            mdata.mod[modality.name].uns[BATCH_N_KEY] = len(
-                mdata.mod[modality.name].obs[BATCH_KEY].cat.categories
-            )
+            self.early_stop = True
 
-    if not MOD_KEY in mdata.obs.columns:
-        mdata.obs[MOD_KEY] = mdata.obsm[Modality.rna.name].astype(int) + (
-            mdata.obsm[Modality.msi.name].astype(int) * 2
-        )
-        mdata.mod[Modality.rna.name].obs[MOD_KEY] = mdata[
-            mdata.obsm[Modality.rna.name] == True
-        ].obs[MOD_KEY]
-        mdata.mod[Modality.msi.name].obs[MOD_KEY] = mdata[
-            mdata.obsm[Modality.msi.name] == True
-        ].obs[MOD_KEY]
+    def _has_score_improved(self, current_score) -> bool:
+        return self.best_score is None or current_score < self.best_score - self.delta
+
+
+def log_loss(writer, loss_values: Dict[str, float], iteration: int, train=True) -> None:
+    for key, value in loss_values.items():
+        if train:
+            writer.add_scalar(f"PoE_training/{key}", value, iteration)
+        else:
+            writer.add_scalar(f"PoE_test/{key}", value, iteration)
