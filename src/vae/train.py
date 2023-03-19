@@ -8,7 +8,7 @@ from src.vae.loss_calculator import LossCalculator as VAE_LossCalculator
 import numpy as np
 import torch
 from tqdm import tqdm
-from src.train import TrainParams
+from src.types import TrainParams
 from src.utils import EarlyStopping, log_loss
 from src.vae.model import VAE
 from anndata import AnnData

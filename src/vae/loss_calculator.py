@@ -2,8 +2,7 @@ from typing import Callable, Dict
 
 from src.vae.types import VAEInputT, VAEOutputT
 
-from src.loss import get_loss_fun, mse
-from src.lisi import compute_lisi
+from src.loss import get_loss_fun, mse, compute_lisi
 
 import torch
 

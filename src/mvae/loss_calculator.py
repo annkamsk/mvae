@@ -1,14 +1,12 @@
 from typing import Callable, Dict
 
-from src.loss import get_loss_fun, mmd, mse
-
-from src.lisi import compute_lisi
+from src.loss import get_loss_fun, mmd, mse, compute_lisi
 
 from src.harmony import harmonize
 
 from src.latent import Latent
 
-from src.types import (
+from src.mvae.types import (
     Modality,
     ModalityOutput,
     ModelInputT,

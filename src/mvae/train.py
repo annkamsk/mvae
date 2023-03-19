@@ -2,7 +2,7 @@ import datetime
 from typing import Any, Dict, Tuple
 
 from src.utils import EarlyStopping, log_loss
-from src.train import TrainParams
+from src.types import TrainParams
 
 from src.mvae.dataloader import (
     mudata_to_dataloader,

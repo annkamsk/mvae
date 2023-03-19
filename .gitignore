@@ -2,5 +2,4 @@
 **/__pycache__
 data/
 logs/
-mvae_params.pt
 mvae_params/
