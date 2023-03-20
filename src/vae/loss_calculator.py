@@ -62,6 +62,5 @@ class LossCalculator:
         """
         batch_id = model_input["batch_id"]
         poe = model_output["latent"]["z"]
-
         # poe_corrected = harmonize(poe, batch_id, device_type=device)
         self.batch_integration = 1 / compute_lisi(poe, batch_id, perplexity)

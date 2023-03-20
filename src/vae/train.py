@@ -1,7 +1,7 @@
 import datetime
 from typing import Dict, Optional, Tuple
 
-from src.vae.types import VAEInputT
+from src.vae.types import VAEInputT, VAEOutputT
 
 from src.vae.dataloader import adata_to_dataloader
 from src.vae.loss_calculator import LossCalculator as VAE_LossCalculator
@@ -57,10 +57,7 @@ def train_vae(model: VAE, adata: AnnData, params: TrainParams = TrainParams()):
         test_loader,
         params,
     )
-    torch.save(
-        model.state_dict(),
-        f"mvae_params/vae_params_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.pt",
-    )
+    torch.save(model.state_dict(), params.get_params_file())
     return epoch_history
 
 
@@ -101,11 +98,9 @@ def _train(
             model_output = model.forward(model_input)
 
             loss_calculator.calculate_private(model_input, model_output)
-            # loss_calculator.calculate_batch_integration_loss(
-            #     model_input, model_output, device=model.device
-            # )
+            loss_calculator.calculate_batch_integration_loss(model_input, model_output)
 
-            loss = loss_calculator.private
+            loss = loss_calculator.total_loss
             loss_value = loss.item()
             epoch_loss += loss_value
 
@@ -156,10 +151,57 @@ def test_model(model: VAE, loader, params: TrainParams) -> Dict[str, float]:
             )
 
             loss_calculator.calculate_private(data, model_output)
-            # loss_calculator.calculate_batch_integration_loss(data, model_output)
+            loss_calculator.calculate_batch_integration_loss(data, model_output)
 
-            loss_value = loss_calculator.private.item()
+            loss_value = loss_calculator.total_loss.item()
             loss_val += loss_value
             i += 1
 
     return loss_val / i
+
+
+def predict(
+    model: VAE,
+    adata: AnnData,
+    params: TrainParams,
+):
+    model.to(model.device)
+    train_loader = adata_to_dataloader(
+        adata,
+        batch_size=params.batch_size,
+        shuffle=params.shuffle,
+    )
+    y = []
+
+    with torch.no_grad():
+        model.eval()
+        for tensors in tqdm(train_loader):
+            tensors = {k: v.to(model.device) for k, v in tensors.items()}
+            model_output: VAEOutputT = model.forward(tensors)
+            y.append(model_output["x"].detach().cpu())
+
+    return y
+
+
+def to_latent(
+    model: VAE,
+    adata: AnnData,
+    params: TrainParams,
+):
+    model.to(model.device)
+    train_loader = adata_to_dataloader(
+        adata,
+        batch_size=params.batch_size,
+        shuffle=params.shuffle,
+    )
+
+    latent = []
+
+    with torch.no_grad():
+        model.eval()
+        for tensors in tqdm(train_loader):
+            tensors = {k: v.to(model.device) for k, v in tensors.items()}
+            model_output = model.forward(tensors)
+            latent.append(model_output["latent"]["z"].cpu())
+
+    return latent

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import datetime
 from typing import Any, Optional
 
 
@@ -16,3 +17,7 @@ class TrainParams:
     rna_loss: str = "mse"
     msi_loss: str = "mse"
     dropout: bool = True
+    params_file: str = ""
+
+    def get_params_file(self) -> str:
+        return f"mvae_params/{self.params_file}_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.pt"
