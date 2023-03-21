@@ -16,6 +16,7 @@ class TrainParams:
     test_patience: int = 20
     rna_loss: str = "mse"
     msi_loss: str = "mse"
+    add_lisi_loss: bool = True
     dropout: bool = True
     params_file: str = ""
 

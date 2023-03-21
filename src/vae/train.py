@@ -57,7 +57,6 @@ def train_vae(model: VAE, adata: AnnData, params: TrainParams = TrainParams()):
         test_loader,
         params,
     )
-    torch.save(model.state_dict(), params.get_params_file())
     return epoch_history
 
 
@@ -67,6 +66,9 @@ def _train(
     writer = SummaryWriter(
         "logs/vae" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     )
+    # params file name will have time of training start
+    params_file = params.get_params_file()
+
     epoch_hist = {"train_loss": [], "valid_loss": []}
     optimizer = optim.Adam(
         model.parameters(), lr=params.learning_rate, weight_decay=5e-4
@@ -98,7 +100,11 @@ def _train(
             model_output = model.forward(model_input)
 
             loss_calculator.calculate_private(model_input, model_output)
-            loss_calculator.calculate_batch_integration_loss(model_input, model_output)
+
+            if params.add_lisi_loss:
+                loss_calculator.calculate_batch_integration_loss(
+                    model_input, model_output
+                )
 
             loss = loss_calculator.total_loss
             loss_value = loss.item()
@@ -129,6 +135,9 @@ def _train(
             test_loss = test_model(model, test_loader, params)
             epoch_hist["valid_loss"].append(test_loss)
             valid_ES(test_loss, epoch + 1)
+
+            torch.save(model.state_dict(), params_file)
+
             if valid_ES.early_stop:
                 break
             log_loss(writer, {"Test loss": test_loss}, epoch + 1, train=False)
@@ -151,7 +160,8 @@ def test_model(model: VAE, loader, params: TrainParams) -> Dict[str, float]:
             )
 
             loss_calculator.calculate_private(data, model_output)
-            loss_calculator.calculate_batch_integration_loss(data, model_output)
+            if params.add_lisi_loss:
+                loss_calculator.calculate_batch_integration_loss(data, model_output)
 
             loss_value = loss_calculator.total_loss.item()
             loss_val += loss_value
@@ -169,7 +179,7 @@ def predict(
     train_loader = adata_to_dataloader(
         adata,
         batch_size=params.batch_size,
-        shuffle=params.shuffle,
+        shuffle=False,
     )
     y = []
 
@@ -192,7 +202,7 @@ def to_latent(
     train_loader = adata_to_dataloader(
         adata,
         batch_size=params.batch_size,
-        shuffle=params.shuffle,
+        shuffle=False,
     )
 
     latent = []

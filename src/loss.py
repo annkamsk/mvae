@@ -100,7 +100,7 @@ def compute_lisi(
         P_i, H = convert_distance_to_probability(D_i, perplexity)
         simpson[i] = compute_simpson(P_i, H, batch_ids, Id_i)
 
-    return torch.nanmean(simpson)
+    return simpson
 
 
 def nearest_neighbors(
@@ -125,8 +125,7 @@ def convert_distance_to_probability(
     P_ij = probability that point x_i would pick x_j as a neighbor if neighbors were picked in proportion to their probability density under a Gaussian centered at x_i
 
     Performs binary search for probability P_ij for given i that's within tolerance tol of perplexity.
-    Perplexity (how well the probability distribution predicts the distances) is a hyperparameter defined
-    as 2^H(P_ij) where H is the Shannon entropy of the distribution.
+    Perplexity (how well the probability distribution predicts the distances) is a hyperparameter defined as 2^H(P_ij) where H is the Shannon entropy of the distribution.
 
     Theory described in: https://www.researchgate.net/publication/228339739_Viualizing_data_using_t-SNE
     """

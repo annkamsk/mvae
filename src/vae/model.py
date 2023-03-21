@@ -24,6 +24,7 @@ class VAE(nn.Module):
             n_hidden=params.n_hidden,
             dropout_rate=params.dropout,
             activation_fn=torch.nn.ReLU,
+            use_batch_norm=True,
         )
         self.decoder = FullyConnectedLayers(
             n_in=params.z_dim,
@@ -32,6 +33,7 @@ class VAE(nn.Module):
             n_hidden=params.n_hidden,
             dropout_rate=params.dropout,
             activation_fn=torch.nn.ReLU,
+            use_batch_norm=True,
         )
         self.final = nn.Sequential(
             torch.nn.Linear(params.n_hidden, n_in), torch.nn.ReLU()

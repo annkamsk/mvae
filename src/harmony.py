@@ -350,12 +350,9 @@ def compute_objective(Y_norm, Z_norm, R, theta, sigma, O, E):
     return kmeans_error + entropy_term + diversity_penalty
 
 
-def is_convergent_harmony(objectives_harmony, tol):
-    if len(objectives_harmony) < 2:
+def is_convergent_harmony(obj_old, obj_new, tol) -> bool:
+    if obj_old is None or obj_new is None:
         return False
-
-    obj_old = objectives_harmony[-2]
-    obj_new = objectives_harmony[-1]
 
     return (obj_old - obj_new) < tol * torch.abs(obj_old)
 

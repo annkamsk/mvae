@@ -1,3 +1,4 @@
+from typing import Optional, Tuple
 from src.vae.dataloader import setup_batch_key
 from src.constants import BATCH_KEY
 import scanpy as sc
@@ -46,8 +47,11 @@ def plot_embedding(
 
 
 def classification_performance(
-    model: VAE, adata: AnnData, train_params: TrainParams = TrainParams()
-) -> float:
+    model: VAE,
+    adata: AnnData,
+    key: str = "ann",
+    train_params: TrainParams = TrainParams(),
+) -> Tuple[float, RandomForestClassifier]:
     if "X_vae" not in adata.obsm.keys():
         adata.obsm["X_vae"] = umap(model, adata, train_params)
 
@@ -57,12 +61,12 @@ def classification_performance(
         y_train_z_ann,
         y_test_z_ann,
     ) = train_test_split(
-        adata.obsm["X_vae"], adata.obs["ann"], test_size=0.33, random_state=2137
+        adata.obsm["X_vae"], adata.obs[key], test_size=0.33, random_state=2137
     )
 
     rfc_z_shared_ann = RandomForestClassifier()
     rfc_z_shared_ann.fit(X_train_z_ann, y_train_z_ann)
-    return rfc_z_shared_ann.score(X_test_z_ann, y_test_z_ann)
+    return rfc_z_shared_ann.score(X_test_z_ann, y_test_z_ann), rfc_z_shared_ann
 
 
 def batch_integration(
@@ -73,4 +77,41 @@ def batch_integration(
     X = torch.Tensor(np.vstack([x.numpy() for x in emb])).to(model.device)
     batch_id = torch.ByteTensor(adata.obs.loc[:, BATCH_KEY].values).to(model.device)
 
-    return compute_lisi(X, batch_id)
+    return torch.nanmean(compute_lisi(X, batch_id))
+
+
+def plot_spatial(
+    model: VAE,
+    adata: AnnData,
+    key: str = "ann",
+    rfc: Optional[RandomForestClassifier] = None,
+):
+    if rfc is None:
+        _, rfc = classification_performance(model, adata, key)
+
+    adata.obs["predicted_ann"] = rfc.predict(adata.obsm["X_vae"])
+    adata.obs["predicted_ann"] = adata.obs["predicted_ann"].astype("category")
+
+    total_categories = set(adata.obs[key].cat.categories)
+
+    for i, s in enumerate(adata.obs.loc[:, "sample"].unique()):
+        mdata_tmp = adata[adata.obs.loc[:, "sample"] == s]
+        subset_ann_cat = set(mdata_tmp.obs["ann"].cat.categories)
+        mdata_tmp.obs["ann"] = mdata_tmp.obs["ann"].cat.add_categories(
+            total_categories - subset_ann_cat
+        )
+        mdata_tmp.obs["ann"] = mdata_tmp.obs["ann"].cat.reorder_categories(
+            total_categories
+        )
+
+        subset_predicted_cat = set(mdata_tmp.obs["predicted_ann"].cat.categories)
+        mdata_tmp.obs["predicted_ann"] = mdata_tmp.obs[
+            "predicted_ann"
+        ].cat.add_categories(total_categories - subset_predicted_cat)
+        mdata_tmp.obs["predicted_ann"] = mdata_tmp.obs[
+            "predicted_ann"
+        ].cat.reorder_categories(total_categories)
+
+        sc.pl.spatial(
+            mdata_tmp, color=[key, "predicted_ann"], spot_size=3, title=s, wspace=0.35
+        )
