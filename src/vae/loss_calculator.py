@@ -1,5 +1,7 @@
 from typing import Callable, Dict
 
+from src.harmony import harmonize
+
 from src.vae.types import VAEInputT, VAEOutputT
 
 from src.loss import get_loss_fun, mse, compute_lisi
@@ -56,7 +58,7 @@ class LossCalculator:
         self,
         model_input: VAEInputT,
         model_output: VAEOutputT,
-        perplexity: float = 50,
+        perplexity: float = 30,
     ):
         """
         Tries to correct the latent space for batch effects with Harmony and calculates loss
@@ -65,7 +67,7 @@ class LossCalculator:
         batch_id = model_input["batch_id"]
         poe = model_output["latent"]["z"]
 
-        # poe_corrected = harmonize(poe, batch_id, device_type=device)
+        poe_corrected = harmonize(poe, batch_id)
         self.batch_integration = 1 / torch.nanmean(
-            compute_lisi(poe, batch_id, perplexity) ** 2
+            compute_lisi(poe_corrected, batch_id, perplexity)
         )

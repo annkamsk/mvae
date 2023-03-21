@@ -7,8 +7,6 @@ from typing import Tuple
 import torch
 
 import numpy as np
-
-from sklearn.cluster import KMeans
 from torch.nn.functional import normalize, one_hot
 
 
@@ -26,7 +24,7 @@ def harmonize(
     theta: float = 2.0,
     tau: int = 0,
     correction_method: str = "original",
-    device_type: str = "cpu",
+    device_type: str = "cuda",
     verbose: bool = False,
 ) -> torch.Tensor:
     """
@@ -72,18 +70,14 @@ def harmonize(
     correction_method: ``string``, optional, default: ``fast``
         Choose which method for the correction step: ``original`` for original method, ``fast`` for improved method. By default, use improved method.
 
-    device_type: ``str``, optional, default: ``cpu``
-        If ``cuda``, use GPU.
-
-    verbose: ``bool``, optional, default ``False``
-        If ``True``, print verbose output.
-
     Returns
     -------
     ``torch.Tensor``
         The integrated embedding by Harmony, of the same shape as the input embedding.
     """
     Z = X.to(dtype=torch.float)
+
+    # L2 normalization
     Z_norm = normalize(Z, p=2, dim=1)
     n_cells = Z.shape[0]
 
@@ -111,7 +105,7 @@ def harmonize(
     assert 0 < block_proportion <= 1
     assert correction_method in ["fast", "original"]
 
-    R, E, O, objectives_harmony = initialize_centroids(
+    R, E, O, objective_harmony = initialize_centroids(
         Z_norm,
         n_clusters,
         sigma,
@@ -124,7 +118,7 @@ def harmonize(
         print("\tInitialization is completed.")
 
     for i in range(max_iter_harmony):
-        objective = clustering(
+        new_objective = clustering(
             Z_norm,
             Pr_b,
             Phi,
@@ -137,7 +131,6 @@ def harmonize(
             sigma,
             block_proportion,
         )
-        objectives_harmony.append(objective)
 
         Z_hat = correction(Z, R, Phi, O, ridge_lambda, correction_method, device_type)
         Z_norm = normalize(Z_hat, p=2, dim=1)
@@ -150,15 +143,12 @@ def harmonize(
                 )
             )
 
-        if is_convergent_harmony(objectives_harmony, tol=tol_harmony):
+        if is_convergent_harmony(objective_harmony, new_objective, tol=tol_harmony):
             if verbose:
                 print("Reach convergence after {} iteration(s).".format(i + 1))
             break
 
-    if device_type == "cpu":
-        return Z_hat
-    else:
-        return Z_hat
+    return Z_hat
 
 
 def initialize_centroids(
@@ -169,29 +159,32 @@ def initialize_centroids(
     Phi,
     theta,
 ):
-    # get centroids from kmeans clustering
+    # 1. get centroids from kmeans clustering
     _, Y = kmeans(Z_norm, n_clusters)
     Y_norm = normalize(Y, p=2, dim=1)
 
-    # assign cluster probabilities
+    # 2. assign cluster probabilities
+    # R = exp(-||Z_i - Y_k||^2 / sigma)
+    # because we use cosine distance, we can rewrite it as: R = exp(-2 * (1 - Z_i * Y_k) / sigma)
     R = torch.exp(-2 / sigma * (1 - torch.matmul(Z_norm, Y_norm.t())))
     R = normalize(R, p=1, dim=1)
 
-    # batch diversity statistics
+    # 3. evaluate cluster diversity
     E = torch.matmul(Pr_b, torch.sum(R, dim=0, keepdim=True))
     O = torch.matmul(Phi.t(), R)
 
     objective_harmony = compute_objective(Y_norm, Z_norm, R, theta, sigma, O, E)
-    return R, E, O, [objective_harmony]
+    return R, E, O, objective_harmony
 
 
 def kmeans(X, n_clusters, tol=1e-4) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Calculates the K-Means clustering for X.
+    Calculates the K-Means clustering for X with Lloyd method.
     Returns the cluster assignments per row and the cluster centers.
 
     Code adapted from https://github.com/overshiki/kmeans_pytorch.
     """
+    # forgy init: choose initial cluster centers randomly
     indices = np.random.choice(len(X), n_clusters)
     initial_state = X[indices]
 
@@ -203,12 +196,13 @@ def kmeans(X, n_clusters, tol=1e-4) -> Tuple[torch.Tensor, torch.Tensor]:
 
         initial_state_pre = initial_state.clone()
 
+        # calculate the mean of each cluster and treat it as the new cluster center
         for cluster_idx in range(n_clusters):
             rows_with_cluster_idx = torch.nonzero(
                 closest_clusters == cluster_idx
             ).squeeze()
-            row_with_cluster = torch.index_select(X, 0, rows_with_cluster_idx)
-            initial_state[cluster_idx] = row_with_cluster.mean(dim=0)
+            rows_with_cluster = torch.index_select(X, 0, rows_with_cluster_idx)
+            initial_state[cluster_idx] = rows_with_cluster.mean(dim=0)
 
         center_shift = torch.sum(
             torch.sqrt(torch.sum((initial_state - initial_state_pre) ** 2, dim=1))
@@ -238,11 +232,12 @@ def clustering(
     objectives_clustering = []
 
     for _ in range(max_iter):
-        # Compute Cluster Centroids
-        Y = torch.matmul(R.t(), Z_norm)
+        # Re-compute cluster centroids
+        Y = torch.matmul(R.clone().t(), Z_norm)
         Y_norm = normalize(Y, p=2, dim=1)
 
-        # Update cells in blocks
+        # update R
+        # update cells in blocks
         update_order_idx = np.arange(n_cells)
         np.random.shuffle(update_order_idx)
         n_blocks = np.ceil(1 / block_proportion).astype(int)
