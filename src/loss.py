@@ -88,7 +88,6 @@ def compute_lisi(
     LISI close to 1 means item is surrounded by neighbors from 1 batch,
     LISI close to N means item is surrounded by neighbors from all N batches.
     """
-    # We need at least 3 * n_neighbors to compute the perplexity
     n_neighbors = min(3 * perplexity, X.shape[0] - 1)
     distances, indices = nearest_neighbors(X, n_neighbors)
     n_cells = distances.size(dim=0)
@@ -171,6 +170,9 @@ def convert_distance_to_probability(
 def compute_entropy(D: torch.Tensor, beta):
     P = torch.exp(-D.clone() * beta)
     sumP = torch.sum(P)
+
+    if sumP == 0:
+        return 0, torch.zeros(D.shape[0])
 
     H = torch.log(sumP) + beta * torch.sum(D * P) / sumP
     P = P / sumP

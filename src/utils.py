@@ -1,5 +1,4 @@
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Dict
 
 import numpy as np
 
@@ -10,7 +9,7 @@ class EarlyStopping:
     """
 
     def __init__(
-        self, patience: int = 7, verbose=False, delta: float = 0, mode="train"
+        self, patience: int = 7, verbose=False, delta: float = 0.01, mode="train"
     ):
         self.patience = patience
         self.verbose = verbose

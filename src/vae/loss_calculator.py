@@ -56,7 +56,7 @@ class LossCalculator:
         self,
         model_input: VAEInputT,
         model_output: VAEOutputT,
-        perplexity: float = 30,
+        perplexity: float = 50,
     ):
         """
         Tries to correct the latent space for batch effects with Harmony and calculates loss
@@ -64,5 +64,8 @@ class LossCalculator:
         """
         batch_id = model_input["batch_id"]
         poe = model_output["latent"]["z"]
+
         # poe_corrected = harmonize(poe, batch_id, device_type=device)
-        self.batch_integration = 1 / torch.nanmean(compute_lisi(poe, batch_id, perplexity))
+        self.batch_integration = 1 / torch.nanmean(
+            compute_lisi(poe, batch_id, perplexity) ** 2
+        )

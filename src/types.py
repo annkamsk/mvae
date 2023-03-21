@@ -12,8 +12,8 @@ class TrainParams:
     shuffle: bool = True
     batch_split: Any = None
     leave_sample_out: Optional[str] = None  # name of sample to leave out in training
-    train_patience: int = 20
-    test_patience: int = 20
+    train_patience: int = 10
+    test_patience: int = 10
     rna_loss: str = "mse"
     msi_loss: str = "mse"
     add_lisi_loss: bool = True
