@@ -13,6 +13,7 @@ from torch.nn.functional import normalize, one_hot
 def harmonize(
     X: torch.Tensor,
     batch_ids: torch.Tensor,
+    n_batches: int = 16,
     n_clusters: int = None,
     max_iter_harmony: int = 10,
     max_iter_clustering: int = 200,
@@ -82,13 +83,17 @@ def harmonize(
     n_cells = Z.shape[0]
 
     # number of items in each batch
-    _, N_b = torch.unique(batch_ids, sorted=True, return_counts=True)
+    batch, batch_count = torch.unique(batch_ids, sorted=True, return_counts=True)
+    # fill for all the possible batches (not all might be present in data)
+    N_b = torch.zeros(n_batches, dtype=torch.long, device=device_type)
+    N_b[batch.to(torch.long)] = batch_count
+
     # proportion of items in each batch
     Pr_b = N_b.view(-1, 1) / n_cells
 
     n_batches = N_b.size(dim=0)
 
-    Phi = one_hot(batch_ids.long()).squeeze().float()
+    Phi = one_hot(batch_ids.long(), num_classes=n_batches).squeeze().float()
 
     if n_clusters is None:
         n_clusters = int(min(100, n_cells / 30))
@@ -177,7 +182,7 @@ def initialize_centroids(
     return R, E, O, objective_harmony
 
 
-def kmeans(X, n_clusters, tol=1e-4) -> Tuple[torch.Tensor, torch.Tensor]:
+def kmeans(X, n_clusters, tol=1e-4, max_ite=50000) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Calculates the K-Means clustering for X with Lloyd method.
     Returns the cluster assignments per row and the cluster centers.
@@ -188,21 +193,22 @@ def kmeans(X, n_clusters, tol=1e-4) -> Tuple[torch.Tensor, torch.Tensor]:
     indices = np.random.choice(len(X), n_clusters)
     initial_state = X[indices]
 
-    while True:
+    for _ in range(max_ite):
         dist = torch.cdist(X, initial_state)
 
         # the closest cluster center for each row
         closest_clusters = torch.argmin(dist, dim=1)
 
+        # it might happen that some clusters are empty, so we need to reinitialize them
+        if torch.unique(closest_clusters).size(0) != n_clusters:
+            indices = np.random.choice(len(X), n_clusters)
+            initial_state = X[indices]
+            continue
+
         initial_state_pre = initial_state.clone()
 
         # calculate the mean of each cluster and treat it as the new cluster center
-        for cluster_idx in range(n_clusters):
-            rows_with_cluster_idx = torch.nonzero(
-                closest_clusters == cluster_idx
-            ).squeeze()
-            rows_with_cluster = torch.index_select(X, 0, rows_with_cluster_idx)
-            initial_state[cluster_idx] = rows_with_cluster.mean(dim=0)
+        initial_state = cluster_centers(n_clusters, closest_clusters, X)
 
         center_shift = torch.sum(
             torch.sqrt(torch.sum((initial_state - initial_state_pre) ** 2, dim=1))
@@ -212,6 +218,18 @@ def kmeans(X, n_clusters, tol=1e-4) -> Tuple[torch.Tensor, torch.Tensor]:
             break
 
     return closest_clusters, initial_state
+
+
+def cluster_centers(n_clusters, closest_clusters, X):
+    # sum up all the points in each cluster
+    cluster_sum = torch.zeros(n_clusters, X.shape[1], device=X.device).index_add_(
+        0, closest_clusters, X
+    )
+    # get cluster sizes and repeat them for each column for easy division
+    _, count = torch.unique(closest_clusters, return_counts=True)
+    clusters_count = count.to(torch.float).unsqueeze(1).expand(n_clusters, X.shape[1])
+
+    return torch.div(cluster_sum, clusters_count)
 
 
 def clustering(
