@@ -1,5 +1,5 @@
 """
-Methods defined in this file are adapted from the following repository:
+Methods inspired by:
 https://github.com/lilab-bcb/harmony-pytorch
 """
 

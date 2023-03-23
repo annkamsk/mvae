@@ -11,7 +11,6 @@ from anndata import AnnData
 from src.vae.train import to_latent, predict
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.neighbors import NearestNeighbors
 
 
 def umap(model: VAE, adata: AnnData, train_params=TrainParams()):
