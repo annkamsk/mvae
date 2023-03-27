@@ -79,6 +79,7 @@ def pairwise_distance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 def compute_lisi(
     X: torch.Tensor,
     batch_ids: torch.Tensor,
+    batch_n: int,
     perplexity: float = 30,
 ):
     """
@@ -97,7 +98,7 @@ def compute_lisi(
         D_i = distances[i, :]
         Id_i = indices[i, :]
         P_i, H = convert_distance_to_probability(D_i, perplexity)
-        simpson[i] = compute_simpson(P_i, H, batch_ids, Id_i)
+        simpson[i] = compute_simpson(P_i, H, batch_ids, Id_i, batch_n)
 
     return simpson
 
@@ -185,6 +186,7 @@ def compute_simpson(
     H: torch.Tensor,
     batch_ids: torch.Tensor,
     indices: torch.Tensor,
+    batch_n: int = 16,
     device="cuda",
 ) -> torch.Tensor:
     """
@@ -196,7 +198,7 @@ def compute_simpson(
     neighbors_batches = batch_ids[indices].long().squeeze()
 
     # for each batch, compute the sum of the probabilities of the neighbors
-    unique_batches = torch.arange(0, 16, device=device)
+    unique_batches = torch.arange(0, batch_n, device=device)
 
     sumP = torch.zeros_like(
         unique_batches, dtype=torch.float, device=device

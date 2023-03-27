@@ -33,8 +33,8 @@ class UniModalDataset(torch.utils.data.dataset.Dataset):
         return self.dataset.shape[0]
 
 
-def adata_to_dataloader(adata: AnnData, batch_size: int, shuffle=False):
-    setup_batch_key(adata)
+def adata_to_dataloader(adata: AnnData, batch_size: int, batch_key: str, shuffle=False):
+    setup_batch_key(adata, batch_key)
     dataset = UniModalDataset(adata)
     return torch.utils.data.DataLoader(
         dataset,
@@ -44,9 +44,7 @@ def adata_to_dataloader(adata: AnnData, batch_size: int, shuffle=False):
     )
 
 
-def setup_batch_key(adata: AnnData):
-    if not BATCH_KEY in adata.obs.columns:
-        adata.obs[BATCH_KEY] = pd.Categorical(
-            pd.factorize(adata.obs.loc[:, "sample"])[0]
-        )
-        adata.uns[BATCH_N_KEY] = len(adata.obs[BATCH_KEY].cat.categories)
+def setup_batch_key(adata: AnnData, batch_key: str):
+    # if not BATCH_KEY in adata.obs.columns:
+    adata.obs[BATCH_KEY] = pd.Categorical(pd.factorize(adata.obs.loc[:, batch_key])[0])
+    adata.uns[BATCH_N_KEY] = len(adata.obs[BATCH_KEY].cat.categories)

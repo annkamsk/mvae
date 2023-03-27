@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from src.vae.dataloader import setup_batch_key
 from src.constants import BATCH_KEY
 import scanpy as sc
@@ -13,14 +13,14 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 
 
-def umap(model: VAE, adata: AnnData, train_params=TrainParams()):
-    emb = to_latent(model, adata, train_params)
+def umap(model: VAE, adata: AnnData, batch_key: str, train_params=TrainParams()):
+    emb = to_latent(model, adata, batch_key, train_params)
 
-    y = predict(model, adata, train_params)
+    y = predict(model, adata, batch_key, train_params)
     adata.layers["y"] = np.vstack(y)
 
     adata.obsm["z"] = np.vstack([x.numpy() for x in emb])
-
+    sc.tl.pca(adata, svd_solver="arpack")
     sc.pp.neighbors(adata, use_rep="z", n_neighbors=10)
     sc.tl.umap(adata)
     return adata.obsm["X_umap"]
@@ -29,17 +29,19 @@ def umap(model: VAE, adata: AnnData, train_params=TrainParams()):
 def plot_embedding(
     model: VAE,
     adata: AnnData,
+    keys: List[str] = ["tissue", "ann", "sample"],
+    batch_key: str = "sample",
     train_params: TrainParams = TrainParams(),
     leiden_res: float = 0.8,
 ) -> None:
-    adata.obsm["X_vae"] = umap(model, adata, train_params)
+    adata.obsm["X_vae"] = umap(model, adata, batch_key, train_params)
 
     sc.tl.leiden(adata, resolution=leiden_res, key_added=f"r{leiden_res}")
 
     sc.pl.embedding(
         adata,
         "X_vae",
-        color=["tissue", f"r{leiden_res}", "ann", "sample"],
+        color=[f"r{leiden_res}", *keys],
         size=15,
         wspace=0.35,
     )
@@ -69,14 +71,17 @@ def classification_performance(
 
 
 def batch_integration(
-    model: VAE, adata: AnnData, train_params: TrainParams = TrainParams()
+    model: VAE,
+    adata: AnnData,
+    n_batch: int,
+    batch_key: str = "sample",
+    train_params: TrainParams = TrainParams(),
 ):
-    setup_batch_key(adata)
-    emb = to_latent(model, adata, train_params)
+    setup_batch_key(adata, batch_key)
+    emb = to_latent(model, adata, batch_key, train_params)
     X = torch.Tensor(np.vstack([x.numpy() for x in emb])).to(model.device)
     batch_id = torch.ByteTensor(adata.obs.loc[:, BATCH_KEY].values).to(model.device)
-
-    return torch.nanmean(compute_lisi(X, batch_id))
+    return compute_lisi(X, batch_id, n_batch)
 
 
 def plot_spatial(

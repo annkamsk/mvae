@@ -20,11 +20,13 @@ class LossCalculator:
     beta: float
     loss_function: Callable = mse
     dropout: bool = False
+    n_batch: int
 
-    def __init__(self, beta, loss_function="mse", dropout=True):
+    def __init__(self, beta, n_batch: int, loss_function="mse", dropout=True):
         self.beta = beta
         self.loss_function = get_loss_fun(loss_function)
         self.dropout = dropout
+        self.n_batch = n_batch
 
     @property
     def total_loss(self) -> torch.Tensor:
@@ -65,9 +67,9 @@ class LossCalculator:
         as LISI (Local Inverse Simpson Index) score.
         """
         batch_id = model_input["batch_id"]
-        poe = model_output["latent"]["z"]
+        latent = model_output["latent"]["z"]
 
-        poe_corrected = harmonize(poe, batch_id)
-        self.batch_integration = 1 / torch.nanmean(
-            compute_lisi(poe_corrected, batch_id, perplexity)
+        # poe_corrected = harmonize(latent, batch_id)
+        self.batch_integration = 0.001 * torch.nansum(
+            1 / compute_lisi(latent, batch_id, self.n_batch, perplexity)
         )
