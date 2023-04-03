@@ -34,3 +34,5 @@ Model: VAE with loss = MSE + 0.01 * sum(1/LISI), kl beta = 0.01, lr = 1e-4
 Embeddings from best performing methods according to the paper:
 
 ![embedding](img/benchmark_immune/paper.png)
+
+Note that scANVI and scGen chosen here as best methods require cell annotations!
