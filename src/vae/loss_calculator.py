@@ -52,6 +52,7 @@ class LossCalculator:
         x_pred = model_output["x"]
         x_real = torch.squeeze(model_input["x"])
         x_loss = self.loss_function(x_pred, x_real, self.dropout)
+
         self.x = torch.mean(x_loss)
 
         self.private = self.x + self.kl
@@ -70,6 +71,6 @@ class LossCalculator:
         latent = model_output["latent"]["z"]
 
         # poe_corrected = harmonize(latent, batch_id)
-        self.batch_integration = 0.001 * torch.nansum(
+        self.batch_integration = 0.01 * torch.nansum(
             1 / compute_lisi(latent, batch_id, self.n_batch, perplexity)
         )

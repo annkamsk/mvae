@@ -92,6 +92,8 @@ def _train(
             patience=params.test_patience, verbose=True, mode="valid"
         )
 
+    model.prev_params = {}
+
     it = 0
     for epoch in range(params.n_epochs):
         torch.set_num_threads(16)
@@ -110,8 +112,6 @@ def _train(
                 k: v.to(model.device) for k, v in model_input.items()
             }
 
-            optimizer.zero_grad()
-
             model_output = model.forward(model_input)
 
             loss_calculator.calculate_private(model_input, model_output)
@@ -126,6 +126,7 @@ def _train(
             epoch_loss += loss_value
 
             loss.backward()
+
             optimizer.step()
 
             log_loss(
@@ -134,6 +135,10 @@ def _train(
                 it,
                 train=True,
             )
+            is_nan = torch.stack(
+                [torch.isnan(p).any() for p in model.parameters()]
+            ).any()
+            assert not is_nan.item(), "NaN in parameters"
             it += 1
 
         # Get epoch loss

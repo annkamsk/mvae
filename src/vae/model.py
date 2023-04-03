@@ -25,6 +25,7 @@ class VAE(nn.Module):
             dropout_rate=params.dropout,
             activation_fn=torch.nn.ReLU,
             use_batch_norm=True,
+            use_layer_norm=False,
         )
         self.decoder = FullyConnectedLayers(
             n_in=params.z_dim,
@@ -34,6 +35,7 @@ class VAE(nn.Module):
             dropout_rate=params.dropout,
             activation_fn=torch.nn.ReLU,
             use_batch_norm=True,
+            use_layer_norm=False,
         )
         self.final = nn.Sequential(
             torch.nn.Linear(params.n_hidden, n_in), torch.nn.ReLU()
@@ -51,6 +53,8 @@ class VAE(nn.Module):
     def encode(self, input: VAEInputT) -> Latent:
         X = torch.squeeze(input["x"])
         y = self.encoder(X)
+        assert not torch.isnan(y).any()
+
         mu, logvar = self.sampling(y)
         z = sample_latent(mu, logvar)
         return Latent(mu=mu, logvar=logvar, z=z)

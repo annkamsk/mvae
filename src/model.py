@@ -56,14 +56,14 @@ class FullyConnectedLayers(nn.Module):
         self.layers = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for layers in self.layers:
-            for layer in layers:
-                if isinstance(layer, nn.BatchNorm1d):
-                    if x.dim() == 3:
-                        x = torch.cat(
-                            [(layer(slice_x)).unsqueeze(0) for slice_x in x], dim=0
-                        )
-                x = layer(x)
+        for layer in self.layers:
+            if isinstance(layer, nn.BatchNorm1d):
+                if x.dim() == 3:
+                    x = torch.cat(
+                        [(layer(slice_x)).unsqueeze(0) for slice_x in x], dim=0
+                    )
+            x = layer(x)
+            assert not torch.isnan(x).any(), f"NaNs in layer: {layer}"
         return x
 
 

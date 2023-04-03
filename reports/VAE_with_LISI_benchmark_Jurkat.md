@@ -30,4 +30,13 @@ We pre-process the data with the same steps as the authors of the paper and calc
 ![img](img/after_clisi.png)
 ![img](img/after_ilisi.png)
 
+### After (beta=0.001, top 1000 genes)
+![img](img/after_beta_0.001.png)
+
+### After (beta=0.001, top 10k genes)
+![img](img/after_beta_0.001_1k_genes.png)
+
+### After (beta=0.01, top 10k genes)
+![img](img/after_beta_0.01_10k_genes.png)
+
 *Datasets come from: [Zheng et al, “Massively parallel digital transcriptional profiling of single cells”](http://www.nature.com/articles/ncomms14049).
