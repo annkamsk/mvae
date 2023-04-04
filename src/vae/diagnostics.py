@@ -13,15 +13,15 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 
 
-def umap(model: VAE, adata: AnnData, batch_key: str, train_params=TrainParams()):
-    emb = to_latent(model, adata, batch_key, train_params)
+def umap(model: VAE, adata: AnnData, batch_keys: List[str], train_params=TrainParams()):
+    emb = to_latent(model, adata, batch_keys, train_params)
 
-    y = predict(model, adata, batch_key, train_params)
+    y = predict(model, adata, batch_keys, train_params)
     adata.layers["y"] = np.vstack(y)
 
     adata.obsm["z"] = np.vstack([x.numpy() for x in emb])
     sc.tl.pca(adata, svd_solver="arpack")
-    sc.pp.neighbors(adata, use_rep="z", n_neighbors=10)
+    sc.pp.neighbors(adata, use_rep="z", n_neighbors=30)
     sc.tl.umap(adata)
     return adata.obsm["X_umap"]
 
@@ -30,18 +30,18 @@ def plot_embedding(
     model: VAE,
     adata: AnnData,
     keys: List[str] = ["tissue", "ann", "sample"],
-    batch_key: str = "sample",
+    batch_keys: str = ["sample"],
     train_params: TrainParams = TrainParams(),
     leiden_res: float = 0.8,
 ) -> None:
-    adata.obsm["X_vae"] = umap(model, adata, batch_key, train_params)
+    adata.obsm["X_vae"] = umap(model, adata, batch_keys, train_params)
 
     sc.tl.leiden(adata, resolution=leiden_res, key_added=f"r{leiden_res}")
 
     sc.pl.embedding(
         adata,
         "X_vae",
-        color=[f"r{leiden_res}", *keys],
+        color=keys,
         size=15,
         wspace=0.35,
     )

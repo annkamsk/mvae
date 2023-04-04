@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from src.constants import BATCH_N_KEY
 
@@ -38,21 +38,21 @@ def split_into_train_test(
 def train_vae(
     model: VAE,
     adata: AnnData,
-    batch_key: str = "sample",
+    batch_keys: List[str] = ["sample"],
     params: TrainParams = TrainParams(),
 ):
     train_adata, test_adata = split_into_train_test(adata, train_size=params.train_size)
     train_loader = adata_to_dataloader(
         train_adata,
         batch_size=params.batch_size,
-        batch_key=batch_key,
+        batch_keys=batch_keys,
         shuffle=params.shuffle,
     )
     if test_adata:
         test_loader = adata_to_dataloader(
             test_adata,
             batch_size=params.batch_size,
-            batch_key=batch_key,
+            batch_keys=batch_keys,
             shuffle=params.shuffle,
         )
     else:
@@ -64,7 +64,6 @@ def train_vae(
         model,
         train_loader,
         test_loader,
-        train_adata.uns[BATCH_N_KEY],
         params,
     )
     return epoch_history
@@ -74,7 +73,6 @@ def _train(
     model: VAE,
     train_loader,
     test_loader=None,
-    n_batch: int = 0,
     params: TrainParams = TrainParams(),
 ):
     # params file name will have time of training start
@@ -92,8 +90,6 @@ def _train(
             patience=params.test_patience, verbose=True, mode="valid"
         )
 
-    model.prev_params = {}
-
     it = 0
     for epoch in range(params.n_epochs):
         torch.set_num_threads(16)
@@ -103,7 +99,6 @@ def _train(
             optimizer.zero_grad()
             loss_calculator = VAE_LossCalculator(
                 beta=model.params.beta,
-                n_batch=n_batch,
                 dropout=params.dropout,
             )
 
@@ -126,7 +121,6 @@ def _train(
             epoch_loss += loss_value
 
             loss.backward()
-
             optimizer.step()
 
             log_loss(
@@ -152,7 +146,7 @@ def _train(
 
         # Eval
         if test_loader:
-            test_loss = test_model(model, test_loader, n_batch, params)
+            test_loss = test_model(model, test_loader, params)
             epoch_hist["valid_loss"].append(test_loss)
             valid_ES(test_loss, epoch + 1)
 
@@ -166,9 +160,7 @@ def _train(
     return epoch_hist
 
 
-def test_model(
-    model: VAE, loader, n_batch: int, params: TrainParams
-) -> Dict[str, float]:
+def test_model(model: VAE, loader, params: TrainParams) -> Dict[str, float]:
     model.eval()
     loss_val = 0
     i = 0
@@ -178,7 +170,7 @@ def test_model(
             model_output = model.forward(data)
 
             loss_calculator = VAE_LossCalculator(
-                beta=model.params.beta, n_batch=n_batch, dropout=params.dropout
+                beta=model.params.beta, dropout=params.dropout
             )
 
             loss_calculator.calculate_private(data, model_output)
@@ -195,14 +187,14 @@ def test_model(
 def predict(
     model: VAE,
     adata: AnnData,
-    batch_key: str = "sample",
+    batch_keys: List[str] = ["sample"],
     params: TrainParams = TrainParams(),
 ):
     model.to(model.device)
     train_loader = adata_to_dataloader(
         adata,
         batch_size=params.batch_size,
-        batch_key=batch_key,
+        batch_keys=batch_keys,
         shuffle=False,
     )
     y = []
@@ -220,14 +212,14 @@ def predict(
 def to_latent(
     model: VAE,
     adata: AnnData,
-    batch_key: str = "sample",
+    batch_keys: List[str] = ["sample"],
     params: TrainParams = TrainParams(),
 ):
     model.to(model.device)
     train_loader = adata_to_dataloader(
         adata,
         batch_size=params.batch_size,
-        batch_key=batch_key,
+        batch_keys=batch_keys,
         shuffle=False,
     )
 

@@ -47,6 +47,15 @@ Training with kl beta = 0.01, lr = 1e-4
 ![after annotation](img/benchmark_immune/after_tissue_0.01_ann.png)
 ![after annotation](img/benchmark_immune/after_annotation_0.01_ann.png)
 
+### Model: VAE with loss = MSE + 0.01 (1/sum(1/LISI(cell_type)) + sum(1/LISI(tissue)) + sum(1/LISI(batch)) + sum(1/LISI(chemistry)))
+![tensorflow](img/benchmark_immune/tensorflow_0.01_all.png)
+
+
+![after annotation](img/benchmark_immune/after_batch_0.01_all.png)
+![after annotation](img/benchmark_immune/after_chemistry_0.01_all.png)
+![after annotation](img/benchmark_immune/after_tissue_0.01_all.png)
+![after annotation](img/benchmark_immune/after_ann_0.01_all.png)
+
 ## Paper
 Embeddings from best performing methods according to the paper:
 
