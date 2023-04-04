@@ -22,7 +22,7 @@ There is also an option of adding the same cell types from mouse datasets to obt
 ## After training
 Training with kl beta = 0.01, lr = 1e-4
 
-### Model: VAE with loss = MSE + 0.01 * sum(1/LISI)
+### Model: VAE with loss = MSE + 0.01 * sum(1/LISI(batch))
 ![tensorflow](img/benchmark_immune/tensorflow.png)
 
 ![after annotation](img/benchmark_immune/after_batch.png)
@@ -30,13 +30,22 @@ Training with kl beta = 0.01, lr = 1e-4
 ![after annotation](img/benchmark_immune/after_tissue.png)
 ![after annotation](img/benchmark_immune/after_annotation.png)
 
-### Model: VAE with loss = MSE + 0.1 * sum(1/LISI)
+### Model: VAE with loss = MSE + 0.1 * sum(1/LISI(batch))
 ![tensorflow](img/benchmark_immune/tensorflow_0.1.png)
 
 ![after annotation](img/benchmark_immune/after_batch_0.1.png)
 ![after annotation](img/benchmark_immune/after_chemistry_0.1.png)
 ![after annotation](img/benchmark_immune/after_tissue_0.1.png)
 ![after annotation](img/benchmark_immune/after_annotation_0.1.png)
+
+
+### Model: VAE with loss = MSE + 0.01 * 1/sum(1/LISI(cell_type))
+![tensorflow](img/benchmark_immune/tensorflow_0.01_ann.png)
+
+![after annotation](img/benchmark_immune/after_batch_0.01_ann.png)
+![after annotation](img/benchmark_immune/after_chemistry_0.01_ann.png)
+![after annotation](img/benchmark_immune/after_tissue_0.01_ann.png)
+![after annotation](img/benchmark_immune/after_annotation_0.01_ann.png)
 
 ## Paper
 Embeddings from best performing methods according to the paper:
