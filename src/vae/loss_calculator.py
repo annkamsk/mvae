@@ -1,6 +1,4 @@
-from typing import Callable, Dict
-
-from src.vae.dataloader import BATCH_KEYS
+from typing import Callable, Dict, Tuple
 
 from src.harmony import harmonize
 
@@ -23,11 +21,13 @@ class LossCalculator:
     beta: float
     loss_function: Callable = mse
     dropout: bool = False
+    batch_key_dict: Dict[str, Tuple[str, int]] = {}
 
-    def __init__(self, beta, loss_function="mse", dropout=True):
+    def __init__(self, beta, loss_function="mse", dropout=True, batch_key_dict={}):
         self.beta = beta
         self.loss_function = get_loss_fun(loss_function)
         self.dropout = dropout
+        self.batch_key_dict = batch_key_dict
 
     @property
     def total_loss(self) -> torch.Tensor:
@@ -71,7 +71,7 @@ class LossCalculator:
         """
         latent = model_output["latent"]["z"]
 
-        for batch_key, batch_n in BATCH_KEYS.values():
+        for batch_key, batch_n in self.batch_key_dict.values():
             batch_loss = torch.nansum(
                 1
                 / compute_lisi(
@@ -81,9 +81,11 @@ class LossCalculator:
                     perplexity,
                 )
             )
-            if batch_key == "final_annotation":
-                batch_loss = 1 / batch_loss
-            self.batch_losses[batch_key] = 0.01 * batch_loss
+            if batch_key == "batch_batch":
+                batch_loss = 0.1 * batch_loss
+            elif batch_key == "batch_final_annotation":
+                batch_loss = 10 / batch_loss
+            self.batch_losses[batch_key] = batch_loss
 
         # poe_corrected = harmonize(latent, batch_id)
         self.batch_integration = torch.stack(tuple(self.batch_losses.values())).sum()
