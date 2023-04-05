@@ -64,6 +64,11 @@ Training with kl beta = 0.01, lr = 1e-4
 ![after annotation](img/benchmark_immune/after_tissue_0.1_batch_10_ann.png)
 ![after annotation](img/benchmark_immune/after_ann_0.1_batch_10_ann.png)
 
+### Model: VAE with loss = MSE + 0.1 * sum(1/LISI(batch)) + 100 / sum(1/LISI(cell_type))
+
+![after annotation](img/benchmark_immune/after_all_0.1_batch_100_ann.png)
+![after annotation](img/benchmark_immune/after_ann_0.1_batch_100_ann.png)
+
 ## Paper
 Embeddings from best performing methods according to the paper:
 
