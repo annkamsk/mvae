@@ -4,3 +4,4 @@ data/
 logs/
 mvae_params/
 cache/
+reports/*.h5ad
