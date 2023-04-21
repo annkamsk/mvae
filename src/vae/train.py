@@ -94,17 +94,18 @@ def _train(
         )
 
     it = 0
+    loss_calculator = VAE_LossCalculator(
+        beta=model.params.beta,
+        dropout=params.dropout,
+        batch_key_dict=batch_key_setup,
+        summary_writer=writer,
+    )
     for epoch in range(params.n_epochs):
         torch.set_num_threads(16)
         model.train()
         epoch_loss = 0
         for model_input in tqdm(train_loader, total=len(train_loader)):
             optimizer.zero_grad()
-            loss_calculator = VAE_LossCalculator(
-                beta=model.params.beta,
-                dropout=params.dropout,
-                batch_key_dict=batch_key_setup,
-            )
 
             # Send input to device
             model_input: VAEInputT = {
@@ -150,22 +151,25 @@ def _train(
 
         # Eval
         if test_loader:
-            test_loss = test_model(model, test_loader, batch_key_setup, params)
-            epoch_hist["valid_loss"].append(test_loss)
-            valid_ES(test_loss, epoch + 1)
+            test_loss = test_model(model, test_loader, params, loss_calculator)
+            epoch_hist["valid_loss"].append(test_loss["Test loss"])
+            valid_ES(test_loss["Test loss"], epoch + 1)
 
             torch.save(model.state_dict(), params_file)
 
             if valid_ES.early_stop:
                 break
-            log_loss(writer, {"Test loss": test_loss}, epoch + 1, train=False)
+            log_loss(writer, test_loss, epoch + 1, train=False)
 
     writer.close()
     return epoch_hist
 
 
 def test_model(
-    model: VAE, loader, batch_key_setup, params: TrainParams
+    model: VAE,
+    loader,
+    params: TrainParams,
+    loss_calculator: VAE_LossCalculator,
 ) -> Dict[str, float]:
     model.eval()
     loss_val = 0
@@ -175,12 +179,6 @@ def test_model(
             data = {k: v.to(model.device) for k, v in data.items()}
             model_output = model.forward(data)
 
-            loss_calculator = VAE_LossCalculator(
-                beta=model.params.beta,
-                dropout=params.dropout,
-                batch_key_dict=batch_key_setup,
-            )
-
             loss_calculator.calculate_private(data, model_output)
             if params.add_lisi_loss:
                 loss_calculator.calculate_batch_integration_loss(data, model_output)
@@ -189,7 +187,10 @@ def test_model(
             loss_val += loss_value
             i += 1
 
-    return loss_val / i
+    return {
+        "Test loss": loss_val / i,
+        "batch_integration_loss": loss_calculator.values.get("batch_integration", 0),
+    }
 
 
 def predict(

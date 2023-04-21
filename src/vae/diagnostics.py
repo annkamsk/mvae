@@ -20,7 +20,7 @@ def umap(model: VAE, adata: AnnData, batch_keys: List[str], train_params=TrainPa
     adata.layers["y"] = np.vstack(y)
 
     adata.obsm["z"] = np.vstack([x.numpy() for x in emb])
-    sc.tl.pca(adata, svd_solver="arpack")
+    sc.tl.pca(adata)
     sc.pp.neighbors(adata, use_rep="z", n_neighbors=30)
     sc.tl.umap(adata)
     return adata.obsm["X_umap"]
@@ -41,7 +41,7 @@ def plot_embedding(
     sc.pl.embedding(
         adata,
         "X_vae",
-        color=keys,
+        color=[f"r{leiden_res}", *keys],
         size=15,
         wspace=0.35,
     )

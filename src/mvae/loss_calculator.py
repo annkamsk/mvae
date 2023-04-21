@@ -232,4 +232,6 @@ class LossCalculator:
         poe = output["poe_latent"]["z"]
 
         # poe_corrected = harmonize(poe, batch_id, device_type=device)
-        self.batch_integration = 1 / compute_lisi(poe, batch_id, perplexity)
+        self.batch_integration = 1 / compute_lisi(
+            poe, batch_id, perplexity, self.summary_writer
+        )

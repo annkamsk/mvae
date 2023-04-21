@@ -1,6 +1,22 @@
 from dataclasses import dataclass
 import datetime
+from enum import IntEnum
 from typing import Any, Optional
+
+
+class Modality(IntEnum):
+    mod1 = 1
+    mod2 = 2
+
+
+class ObsModalityMembership(IntEnum):
+    """
+    Represents membership status of an observation across modalities.
+    """
+
+    ONLY_MOD1 = 1
+    ONLY_MOD2 = 2
+    PAIRED = 3
 
 
 @dataclass

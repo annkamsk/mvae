@@ -81,6 +81,7 @@ def compute_lisi(
     batch_ids: torch.Tensor,
     batch_n: int,
     perplexity: float = 30,
+    summary_writer=None,
 ):
     """
     Compute the mean of Local Inverse Simpson Index (LISI) for all cells.
@@ -95,29 +96,51 @@ def compute_lisi(
     simpson = torch.zeros(n_cells, device=X.device)
 
     for i in range(n_cells):
-        D_i = distances[i, :]
-        Id_i = indices[i, :]
+        D_i = distances[i, ~torch.isnan(distances[i, :])]
+        Id_i = indices[i, ~torch.isnan(indices[i, :])].long()
         P_i, H = convert_distance_to_probability(D_i, perplexity)
-        simpson[i] = compute_simpson(P_i, H, batch_ids, Id_i, batch_n)
+        simpson[i] = compute_simpson(P_i, batch_ids, Id_i, batch_n)
 
     return simpson
 
 
 def nearest_neighbors(
-    X: torch.Tensor, n_neighbors: int = 5
+    X: torch.Tensor, n_neighbors: int = 5, mutual: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     pairwise_distances = torch.cdist(X, X.clone())
 
     # take n_neighbors + 1 because the closest will be the point itself
-    distances, indices = pairwise_distances.topk(n_neighbors + 1, largest=False)
+    distances_all, indices_all = pairwise_distances.topk(n_neighbors + 1, largest=False)
 
     # skip the first one in each row because it is the point itself
-    return distances[:, 1:], indices[:, 1:]
+    distances, indices = distances_all[:, 1:], indices_all[:, 1:]
+
+    if not mutual:
+        return distances, indices
+
+    # filter only mutual nearest neighbors
+    mnn_indices = torch.full(indices.size(), device=X.device, fill_value=torch.nan)
+    mnn_distances = torch.full(distances.size(), device=X.device, fill_value=torch.nan)
+    for cell_idx in range(indices.size(0)):
+        neighbors = indices[cell_idx]
+        is_neighbor_of = (
+            (indices.flatten() == cell_idx)
+            .nonzero()
+            .div(indices.size(1), rounding_mode="floor")
+        )
+        mutual_idx = (neighbors == is_neighbor_of).any(dim=0)
+        if not mutual_idx.any():
+            continue
+        mutual = neighbors[mutual_idx]
+        mutual_distances = distances[cell_idx, mutual_idx]
+        mnn_indices[cell_idx][: len(mutual)] = mutual
+        mnn_distances[cell_idx][: len(mutual)] = mutual_distances
+    return mnn_distances, mnn_indices
 
 
 def convert_distance_to_probability(
     Di: torch.Tensor, perplexity: float, beta: float = 1.0, tol: float = 1e-5
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor:
     """
     Computes Gaussian kernel-based distribution of a cell neighborhood by
     converting distances into conditional probabilities P_ij.
@@ -144,22 +167,22 @@ def convert_distance_to_probability(
     n_tries = 50
     for _ in range(n_tries):
         # Is the perplexity within tolerance
-        if abs(Hdiff) < tol:
+        if abs(Hdiff) <= tol:
             break
 
         # If not, increase or decrease precision
         if Hdiff > 0:
             betamin = beta
             if betamax is None:
-                beta *= 2
+                beta *= 2.0
             else:
-                beta = (beta + betamax) / 2
+                beta = (beta + betamax) / 2.0
         else:
             betamax = beta
             if betamin is None:
-                beta /= 2
+                beta /= 2.0
             else:
-                beta = (beta + betamin) / 2
+                beta = (beta + betamin) / 2.0
 
         # Recompute the values
         H, P = compute_entropy(Di, beta)
@@ -170,12 +193,12 @@ def convert_distance_to_probability(
 
 def compute_entropy(D: torch.Tensor, beta):
     P = torch.exp(-D.clone() * beta)
-    sumP = torch.sum(P)
+    sumP = torch.nansum(P)
 
     if sumP == 0:
-        return 0, torch.zeros(D.shape[0])
+        return torch.zeros(1, device=D.device), torch.zeros(D.shape, device=D.device)
 
-    H = torch.log(sumP) + beta * torch.sum(D * P) / sumP
+    H = torch.log(sumP) + beta * torch.nansum(D * P) / sumP
     P = P / sumP
 
     return H, P
@@ -183,7 +206,6 @@ def compute_entropy(D: torch.Tensor, beta):
 
 def compute_simpson(
     P: torch.Tensor,
-    H: torch.Tensor,
     batch_ids: torch.Tensor,
     indices: torch.Tensor,
     batch_n: int = 16,
@@ -192,10 +214,7 @@ def compute_simpson(
     """
     Computes Inverse Simpson Index = 1 / Σ p(b), where b is batch
     """
-    if H == 0:
-        return torch.tensor(-1)
-
-    neighbors_batches = batch_ids[indices].long().squeeze()
+    neighbors_batches = batch_ids[indices].long().view(-1)
 
     # for each batch, compute the sum of the probabilities of the neighbors
     unique_batches = torch.arange(0, batch_n, device=device)
@@ -204,4 +223,24 @@ def compute_simpson(
         unique_batches, dtype=torch.float, device=device
     ).scatter_add_(0, neighbors_batches, P)
 
-    return 1 / torch.sum(sumP**2)
+    return 1 / torch.nansum(sumP**2)
+
+
+def compute_spatial_loss(
+    neighbor_indices: torch.Tensor, cell_id: torch.Tensor, neighbors_prior: torch.Tensor
+):
+    """
+    Calculate how many neighbors in latent are also spatially close.
+    neighbors_prior: tensor of shape (n_cells, prior_n_neighbors)
+    cell_id: tensor of shape (n_cells) with cell index
+    neighbor_indices: tensor of shape (n_cells, n_neighbors) with indices of neighbors in latent space
+    """
+    spatial_loss = 0
+    for i in range(neighbor_indices.size(0)):
+        Id_i = neighbor_indices[i, :].long()
+        neighbors_id = cell_id[Id_i]
+        intersection = torch.intersect1d(neighbors_id, neighbors_prior[cell_id[i]])
+
+        spatial_loss += intersection.size(0)
+
+    return 1 / spatial_loss

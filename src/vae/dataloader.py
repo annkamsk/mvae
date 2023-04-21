@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 import torch
+import sklearn.neighbors
 
 
 BATCH_KEYS = {}
@@ -65,3 +66,42 @@ def setup_batch_key(
         n_batch = len(adata.obs[key].cat.categories)
         batch_key_dict[batch_key] = (key, n_batch)
     return batch_key_dict
+
+
+def setup_spatial_neighbor_network(adata: AnnData, k_neigh=6):
+    """
+    Creates matrix with pairs of k_neigh spatial neighbors and their spatial distance.
+    Neighbors are searched only within cells of the same sample.
+    Saves matrix under adata.uns['spatial_net'].
+    Adapted from: https://github.com/zhanglabtools/STAGATE/blob/main/STAGATE/utils.py
+    """
+    assert (
+        "spatial" in adata.obsm.keys()
+    ), "AnnData object must include spatial coordinates in adata.obsm['spatial']"
+
+    spatial_net = []
+
+    for sample in adata.obs["sample"].unique():
+        sample_adata = adata[adata.obs["sample"] == sample, :]
+        coor = pd.DataFrame(
+            sample_adata.obsm["spatial"],
+            index=sample_adata.obs.index,
+            columns=["imagerow", "imagecol"],
+        )
+
+        nbrs = sklearn.neighbors.NearestNeighbors(n_neighbors=k_neigh + 1).fit(coor)
+        distances_all, indices_all = nbrs.kneighbors(coor)
+
+        # remove self
+        distances, indices = distances_all[:, 1:], indices_all[:, 1:]
+
+        spatial_net.append(
+            (
+                coor.index.repeat(indices.shape[1]),
+                coor.index[indices.flatten()],
+                distances.flatten(),
+            )
+        )
+    adata.uns["spatial_net"] = pd.DataFrame(
+        spatial_net, columns=["source", "target", "distance"]
+    ).explode(["source", "target", "distance"], ignore_index=True)

@@ -1,9 +1,5 @@
 from typing import Any, Callable, Dict, Tuple
 
-from src.harmony import harmonize
-
-from src.vae.types import VAEInputT, VAEOutputT
-
 from src.loss import get_loss_fun, mse, compute_lisi
 
 import torch
@@ -13,6 +9,7 @@ from src.latent import Latent
 
 class LossCalculator:
     private = None
+    shared = None
     batch_integration = None
     batch_losses = {}
     x = None
@@ -103,5 +100,5 @@ class LossCalculator:
         ).sum()
 
         if not self.gamma:
-            self.gamma = 0.01 * self.private.item() / self.batch_integration.item()
+            self.gamma = 0.5 * self.private.item() / self.batch_integration.item()
             self.batch_integration = self.gamma * self.batch_integration
