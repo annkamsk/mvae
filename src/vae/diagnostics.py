@@ -50,11 +50,12 @@ def plot_embedding(
 def classification_performance(
     model: VAE,
     adata: AnnData,
-    key: str = "ann",
+    label_key: str = "ann",
+    embed_key: str = "X_vae",
     train_params: TrainParams = TrainParams(),
 ) -> Tuple[float, RandomForestClassifier]:
-    if "X_vae" not in adata.obsm.keys():
-        adata.obsm["X_vae"] = umap(model, adata, train_params)
+    if embed_key not in adata.obsm.keys():
+        adata.obsm[embed_key] = umap(model, adata, train_params)
 
     (
         X_train_z_ann,
@@ -62,7 +63,7 @@ def classification_performance(
         y_train_z_ann,
         y_test_z_ann,
     ) = train_test_split(
-        adata.obsm["X_vae"], adata.obs[key], test_size=0.33, random_state=2137
+        adata.obsm[embed_key], adata.obs[label_key], test_size=0.33, random_state=2137
     )
 
     rfc_z_shared_ann = RandomForestClassifier()
@@ -87,24 +88,26 @@ def batch_integration(
 def plot_spatial(
     model: VAE,
     adata: AnnData,
-    key: str = "ann",
+    label_key: str = "ann",
+    embed_key: str = "X_vae",
     rfc: Optional[RandomForestClassifier] = None,
 ):
     if rfc is None:
-        _, rfc = classification_performance(model, adata, key)
+        score, rfc = classification_performance(model, adata, label_key, embed_key)
+        print(score)
 
-    adata.obs["predicted_ann"] = rfc.predict(adata.obsm["X_vae"])
+    adata.obs["predicted_ann"] = rfc.predict(adata.obsm[embed_key])
     adata.obs["predicted_ann"] = adata.obs["predicted_ann"].astype("category")
 
-    total_categories = set(adata.obs[key].cat.categories)
+    total_categories = set(adata.obs[label_key].cat.categories)
 
     for i, s in enumerate(adata.obs.loc[:, "sample"].unique()):
         mdata_tmp = adata[adata.obs.loc[:, "sample"] == s]
-        subset_ann_cat = set(mdata_tmp.obs["ann"].cat.categories)
-        mdata_tmp.obs["ann"] = mdata_tmp.obs["ann"].cat.add_categories(
+        subset_ann_cat = set(mdata_tmp.obs[label_key].cat.categories)
+        mdata_tmp.obs[label_key] = mdata_tmp.obs[label_key].cat.add_categories(
             total_categories - subset_ann_cat
         )
-        mdata_tmp.obs["ann"] = mdata_tmp.obs["ann"].cat.reorder_categories(
+        mdata_tmp.obs[label_key] = mdata_tmp.obs[label_key].cat.reorder_categories(
             total_categories
         )
 
@@ -117,5 +120,9 @@ def plot_spatial(
         ].cat.reorder_categories(total_categories)
 
         sc.pl.spatial(
-            mdata_tmp, color=[key, "predicted_ann"], spot_size=3, title=s, wspace=0.35
+            mdata_tmp,
+            color=[label_key, "predicted_ann"],
+            spot_size=3,
+            title=s,
+            wspace=0.35,
         )

@@ -77,7 +77,7 @@ def pairwise_distance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 
 def compute_lisi(
-    X: torch.Tensor,
+    neighbors: Tuple[torch.Tensor, torch.Tensor],
     batch_ids: torch.Tensor,
     batch_n: int,
     perplexity: float = 30,
@@ -90,10 +90,9 @@ def compute_lisi(
     LISI close to 1 means item is surrounded by neighbors from 1 batch,
     LISI close to N means item is surrounded by neighbors from all N batches.
     """
-    n_neighbors = min(3 * perplexity, X.shape[0] - 1)
-    distances, indices = nearest_neighbors(X, n_neighbors)
+    distances, indices = neighbors
     n_cells = distances.size(dim=0)
-    simpson = torch.zeros(n_cells, device=X.device)
+    simpson = torch.zeros(n_cells, device=batch_ids.device)
 
     for i in range(n_cells):
         D_i = distances[i, ~torch.isnan(distances[i, :])]
@@ -227,7 +226,7 @@ def compute_simpson(
 
 
 def compute_spatial_loss(
-    neighbor_indices: torch.Tensor, cell_id: torch.Tensor, neighbors_prior: torch.Tensor
+    neighbors_indices: torch.Tensor, neighbors_prior: torch.Tensor
 ):
     """
     Calculate how many neighbors in latent are also spatially close.
@@ -236,11 +235,10 @@ def compute_spatial_loss(
     neighbor_indices: tensor of shape (n_cells, n_neighbors) with indices of neighbors in latent space
     """
     spatial_loss = 0
-    for i in range(neighbor_indices.size(0)):
-        Id_i = neighbor_indices[i, :].long()
-        neighbors_id = cell_id[Id_i]
-        intersection = torch.intersect1d(neighbors_id, neighbors_prior[cell_id[i]])
-
-        spatial_loss += intersection.size(0)
+    for i in range(neighbors_indices.size(0)):
+        neigh_cat, counts = torch.cat(
+            [neighbors_indices[i], neighbors_prior[i]]
+        ).unique(return_counts=True)
+        spatial_loss += neigh_cat[torch.where(counts.gt(1))].count_nonzero(0)
 
     return 1 / spatial_loss

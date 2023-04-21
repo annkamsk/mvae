@@ -4,7 +4,13 @@ from src.harmony import harmonize
 
 from src.vae.types import VAEInputT, VAEOutputT
 
-from src.loss import get_loss_fun, mse, compute_lisi
+from src.loss import (
+    compute_spatial_loss,
+    get_loss_fun,
+    mse,
+    compute_lisi,
+    nearest_neighbors,
+)
 
 import torch
 
@@ -44,9 +50,12 @@ class LossCalculator:
 
     @property
     def total_loss(self) -> torch.Tensor:
-        if self.batch_integration is None:
-            return self.private
-        return self.private + self.batch_integration
+        total = self.private
+        if self.batch_integration is not None:
+            total += self.batch_integration
+        if self.spatial is not None:
+            total += self.spatial
+        return total
 
     @property
     def values(self) -> Dict[str, float]:
@@ -59,6 +68,8 @@ class LossCalculator:
             vals["batch_integration"] = self.batch_integration.item()
             for batch_key in self.batch_losses:
                 vals[batch_key] = self.batch_losses[batch_key].item()
+        if self.spatial:
+            vals["spatial"] = self.spatial.item()
         return vals
 
     def calculate_private(self, model_input: VAEInputT, model_output: VAEOutputT):
@@ -79,16 +90,18 @@ class LossCalculator:
         perplexity: float = 30,
     ):
         """
-        Tries to correct the latent space for batch effects with Harmony and calculates loss
-        as LISI (Local Inverse Simpson Index) score.
+        Calculates loss as inverse of LISI (Local Inverse Simpson Index) score.
         """
         latent = model_output["latent"]["z"]
+
+        n_neighbors = min(3 * perplexity, latent.shape[0] - 1)
+        distances, indices = nearest_neighbors(latent, n_neighbors)
 
         for batch_key, batch_n in self.batch_key_dict.values():
             batch_loss = torch.nansum(
                 1
                 / compute_lisi(
-                    latent,
+                    (distances, indices),
                     model_input[batch_key],
                     batch_n,
                     perplexity,
@@ -96,6 +109,8 @@ class LossCalculator:
                 )
             )
             self.batch_losses[batch_key] = batch_loss
+
+        self.spatial = compute_spatial_loss(indices, model_input["neighbors"])
 
         # poe_corrected = harmonize(latent, batch_id)
         self.batch_integration = (self.gamma or 1.0) * torch.stack(
