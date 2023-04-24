@@ -76,7 +76,7 @@ def setup_batch_key(
     return batch_key_dict
 
 
-def setup_spatial_neighbor_network(adata: AnnData, k_neigh=20):
+def setup_spatial_neighbor_network(adata: AnnData, k_neigh=8):
     """
     Creates matrix with pairs of k_neigh spatial neighbors and their spatial distance.
     Neighbors are searched only within cells of the same sample.

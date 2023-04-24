@@ -21,6 +21,7 @@ class LossCalculator:
     private = None
     batch_integration = None
     batch_losses = {}
+    spatial = None
     x = None
     kl = None
 
@@ -110,7 +111,7 @@ class LossCalculator:
             )
             self.batch_losses[batch_key] = batch_loss
 
-        self.spatial = compute_spatial_loss(indices, model_input["neighbors"])
+        # self.spatial = compute_spatial_loss(indices, model_input["neighbors"])
 
         # poe_corrected = harmonize(latent, batch_id)
         self.batch_integration = (self.gamma or 1.0) * torch.stack(
@@ -118,5 +119,5 @@ class LossCalculator:
         ).sum()
 
         if not self.gamma:
-            self.gamma = 0.01 * self.private.item() / self.batch_integration.item()
+            self.gamma = 0.1 * self.private.item() / self.batch_integration.item()
             self.batch_integration = self.gamma * self.batch_integration

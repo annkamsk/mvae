@@ -48,27 +48,28 @@ def plot_embedding(
 
 
 def classification_performance(
-    model: VAE,
     adata: AnnData,
     label_key: str = "ann",
     embed_key: str = "X_vae",
-    train_params: TrainParams = TrainParams(),
+    test_size: float = 0.33,
+    loo: str = "",
 ) -> Tuple[float, RandomForestClassifier]:
-    if embed_key not in adata.obsm.keys():
-        adata.obsm[embed_key] = umap(model, adata, train_params)
-
-    (
-        X_train_z_ann,
-        X_test_z_ann,
-        y_train_z_ann,
-        y_test_z_ann,
-    ) = train_test_split(
-        adata.obsm[embed_key], adata.obs[label_key], test_size=0.33, random_state=2137
-    )
+    if len(loo):
+        X_train = adata[adata.obs["sample"] != loo].obsm[embed_key]
+        y_train = adata[adata.obs["sample"] != loo].obs[label_key]
+        X_test = adata[adata.obs["sample"] == loo].obsm[embed_key]
+        y_test = adata[adata.obs["sample"] == loo].obs[label_key]
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(
+            adata.obsm[embed_key],
+            adata.obs[label_key],
+            test_size=test_size,
+            random_state=2137,
+        )
 
     rfc_z_shared_ann = RandomForestClassifier()
-    rfc_z_shared_ann.fit(X_train_z_ann, y_train_z_ann)
-    return rfc_z_shared_ann.score(X_test_z_ann, y_test_z_ann), rfc_z_shared_ann
+    rfc_z_shared_ann.fit(X_train, y_train)
+    return rfc_z_shared_ann.score(X_test, y_test), rfc_z_shared_ann
 
 
 def batch_integration(
@@ -86,14 +87,13 @@ def batch_integration(
 
 
 def plot_spatial(
-    model: VAE,
     adata: AnnData,
     label_key: str = "ann",
     embed_key: str = "X_vae",
     rfc: Optional[RandomForestClassifier] = None,
 ):
     if rfc is None:
-        score, rfc = classification_performance(model, adata, label_key, embed_key)
+        score, rfc = classification_performance(adata, label_key, embed_key)
         print(score)
 
     adata.obs["predicted_ann"] = rfc.predict(adata.obsm[embed_key])

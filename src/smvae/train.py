@@ -1,10 +1,10 @@
 from typing import List
 
-from OtF-prostate.src.smvae.types import ModelOutputT
-from OtF-prostate.src.smvae.types import ModelInputT
+from src.smvae.types import ModelOutputT
+from src.smvae.types import ModelInputT
 
 from tqdm import tqdm
-from OtF-prostate.src.utils import EarlyStopping
+from src.utils import EarlyStopping
 
 import torch
 from src.smvae.dataloader import (
@@ -62,7 +62,7 @@ def _train(
     train_loader_pairs: torch.utils.data.DataLoader,
     test_loader=None,
     test_loader_pairs=None,
-    batch_key_dict = {},
+    batch_key_dict={},
     params: TrainParams = TrainParams(),
 ):
     # Initialize Tensorboard summary writer
@@ -141,13 +141,13 @@ def _train(
 
         # Eval
         if test_loader:
-
-            test_loss = test_model(model, test_loader, test_loader_pairs, params, loss_calculator)
+            test_loss = test_model(
+                model, test_loader, test_loader_pairs, params, loss_calculator
+            )
             epoch_hist["valid_loss"].append(test_loss["Test loss"])
             valid_ES(test_loss["Test loss"], epoch + 1)
 
             torch.save(model.state_dict(), params_file)
-
 
             if valid_ES.early_stop:
                 break
