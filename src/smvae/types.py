@@ -5,33 +5,30 @@ from src.latent import Latent, LatentT
 import torch
 
 
+BATCH_KEY = "batch_id"
+
+
 ModelInputT = TypedDict(
     "ModelInputT",
     {
-        "mod1": torch.Tensor,
-        "mod2": torch.Tensor,
-        "mod_id": int,
-        "batch_id1": torch.ByteTensor,
-        "batch_id2": torch.ByteTensor,
+        "rna": torch.Tensor,
+        "msi": torch.Tensor,
+        "batch_id": torch.ByteTensor,
     },
 )
 
 
 @dataclass
 class ModelInput:
-    mod1: torch.Tensor
-    mod2: torch.Tensor
-    mod_id: Any
-    batch_id1: torch.ByteTensor
-    batch_id2: torch.ByteTensor
+    rna: torch.Tensor
+    msi: torch.Tensor
+    batch_sample: torch.ByteTensor
 
     def to_dict(self) -> ModelInputT:
         return {
-            "mod1": self.mod1,
-            "mod2": self.mod2,
-            "mod_id": self.mod_id,
-            "batch_id1": self.batch_id1,
-            "batch_id2": self.batch_id2,
+            "rna": self.rna,
+            "msi": self.msi,
+            "batch_id": self.batch_sample,
         }
 
 
@@ -41,7 +38,6 @@ ModalityInputT = TypedDict(
         "x": torch.Tensor,
         "mod_id": Any,
         "batch_id": torch.ByteTensor,
-        "idxs": Any,
     },
 )
 

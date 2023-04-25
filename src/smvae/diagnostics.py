@@ -1,0 +1,86 @@
+from typing import List, Tuple
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from src.smvae.train import to_latent
+from src.smvae.model import SMVAE
+from mudata import MuData
+from src.types import TrainParams
+import scanpy as sc
+
+
+def umap(
+    model: SMVAE,
+    mdata: MuData,
+    batch_key: str,
+    train_params: TrainParams = TrainParams(),
+    poe_only: bool = True,
+):
+    poe, mod1_p, mod2_p, mod1_s, mod2_s = to_latent(
+        model, mdata, batch_key, train_params
+    )
+    if not poe_only:
+        mdata.obsm["z1_s"] = np.vstack(mod1_s)
+        mdata.obsm["z2_s"] = np.vstack(mod2_s)
+        mdata.obsm["z1_p"] = np.vstack(mod1_p)
+        mdata.obsm["z2_p"] = np.vstack(mod2_p)
+
+        for layer in ["z1_s", "z2_s", "z1_p", "z2_p"]:
+            sc.pp.neighbors(
+                mdata, n_neighbors=5, use_rep=layer, key_added=f"neigh_{layer}"
+            )
+            sc.tl.umap(mdata, neighbors_key=f"neigh_{layer}")
+            mdata.obsm[f"X_{layer}"] = mdata.obsm["X_umap"]
+
+    mdata.obsm["z"] = np.vstack([x.numpy() for x in poe])
+
+    sc.pp.neighbors(mdata, use_rep="z", n_neighbors=30)
+    sc.tl.umap(mdata)
+    return mdata.obsm["X_umap"]
+
+
+def plot_embedding(
+    model: SMVAE,
+    mdata: MuData,
+    batch_key: str = "sample",
+    keys: List[str] = ["tissue", "ann", "sample"],
+    train_params: TrainParams = TrainParams(),
+    leiden_res: float = 0.8,
+    poe_only: bool = True,
+) -> None:
+    mdata.obsm["X_mvae"] = umap(
+        model, mdata, batch_key, train_params, poe_only=poe_only
+    )
+    sc.tl.leiden(mdata, resolution=leiden_res, key_added=f"r{leiden_res}")
+    sc.pl.embedding(
+        mdata,
+        "X_mvae",
+        color=keys,
+        size=15,
+        wspace=0.35,
+    )
+
+
+def classification_performance(
+    mdata: MuData,
+    label_key: str = "ann",
+    embed_key: str = "X_mvae",
+    test_size: float = 0.33,
+    loo: str = "",
+) -> Tuple[float, RandomForestClassifier]:
+    if len(loo):
+        X_train = mdata[mdata.obs["sample"] != loo].obsm[embed_key]
+        y_train = mdata[mdata.obs["sample"] != loo].obs[label_key]
+        X_test = mdata[mdata.obs["sample"] == loo].obsm[embed_key]
+        y_test = mdata[mdata.obs["sample"] == loo].obs[label_key]
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(
+            mdata.obsm[embed_key],
+            mdata.obs[label_key],
+            test_size=test_size,
+            random_state=2137,
+        )
+
+    rfc_z_shared_ann = RandomForestClassifier()
+    rfc_z_shared_ann.fit(X_train, y_train)
+    return rfc_z_shared_ann.score(X_test, y_test), rfc_z_shared_ann

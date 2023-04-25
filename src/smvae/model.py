@@ -1,23 +1,20 @@
 from typing import Tuple
 
 from src.smvae.types import (
+    BATCH_KEY,
     ModalityInputT,
     ModalityOutputT,
     ModelInputT,
     ModelOutputT,
     ModalityOutput,
 )
+from src.types import Modality
 
 from src.model import FullyConnectedLayers, ModelParams, SamplingLayers
-
-from src.constants import BATCH_N_KEY
-
-from src.mvae.dataloader import setup_mudata
 
 from src.latent import Latent, initialize_latent, prior_expert, sample_latent
 import torch
 from torch import nn
-import torch.nn.functional as F
 
 from mudata import MuData
 
@@ -75,18 +72,10 @@ class ModalityLayers(nn.Module):
         """
         Encode data in latent space (Inference step).
         """
-        batch_id = input["batch_id"][input["idxs"], :]
-        X = torch.squeeze(input["x"][input["idxs"], :, :])
+        X = torch.squeeze(input["x"])
         y = self.encoder(X)
 
-        latent_size = (input["mod_id"].shape[0], self.params.z_dim)
-        latent_p = initialize_latent(latent_size, use_cuda=self.params.use_cuda)
-        latent_s = initialize_latent(latent_size, use_cuda=self.params.use_cuda)
-
-        post_latent = self.sample_latent(y, batch_id)
-        for prior, post in zip([latent_p, latent_s], post_latent):
-            prior.update(post, input["idxs"])
-        return [latent_p, latent_s]
+        return self.sample_latent(y)
 
     def sample_latent(self, y) -> Tuple[Latent, Latent]:
         mu_s, logvar_s = self.shared_sampling(y)
@@ -146,10 +135,8 @@ class SMVAE(torch.nn.Module):
         self.params = params
         self.device = "cuda" if use_cuda else "cpu"
 
-        setup_mudata(mdata)
-
-        rna_shape = mdata.mod["mod1"].shape
-        msi_shape = mdata.mod["mod2"].shape
+        rna_shape = mdata.mod[Modality.rna.name].shape
+        msi_shape = mdata.mod[Modality.msi.name].shape
 
         print(rna_shape)
         print(msi_shape)
@@ -159,33 +146,24 @@ class SMVAE(torch.nn.Module):
         self.poe = PoE()
 
     def forward(self, input: ModelInputT) -> ModelOutputT:
-        mod_id = input["mod_id"]
-
-        mod_idxs_1 = (mod_id == 1) | (mod_id == 3)
-        mod_idxs_2 = (mod_id == 2) | (mod_id == 3)
-
         mod1_output = ModalityOutput.from_dict(
             self.mod1(
                 ModalityInputT(
-                    x=input["rna"],
-                    mod_id=input["mod_id"],
-                    idxs=mod_idxs_1,
-                    batch_id=input["batch_id1"],
+                    x=input[Modality.rna.name],
+                    batch_id=input[BATCH_KEY],
                 )
             )
         )
         mod2_output = ModalityOutput.from_dict(
             self.mod2(
                 ModalityInputT(
-                    x=input["msi"],
-                    mod_id=input["mod_id"],
-                    idxs=mod_idxs_2,
-                    batch_id=input["batch_id2"],
+                    x=input[Modality.msi.name],
+                    batch_id=input[BATCH_KEY],
                 )
             )
         )
         poe = self.encode_poe(
-            (1, mod_id.shape[0], self.params.z_dim),
+            (1, input[BATCH_KEY].shape[0], self.params.z_dim),
             mod1_output.latent_s,
             mod2_output.latent_s,
         )
@@ -193,18 +171,14 @@ class SMVAE(torch.nn.Module):
             poe,
             mod1_output,
             mod2_output,
-            input["batch_id1"],
-            input["batch_id2"],
         )
 
         # Translation losses
         mod1_mod2_loss = self.mod2.decode(
             mod2_output.latent_p.z + mod1_output.latent_s.z,
-            input["batch_id2"],
         )
         mod2_mod1_loss = self.mod1.decode(
             mod1_output.latent_p.z + mod2_output.latent_s.z,
-            input["batch_id1"],
         )
 
         return ModelOutputT(
@@ -213,8 +187,8 @@ class SMVAE(torch.nn.Module):
             poe_latent=poe.to_dict(),
             mod1_poe=mod1_poe,
             mod2_poe=mod2_poe,
-            rna_msi_loss=mod1_mod2_loss,
-            msi_rna_loss=mod2_mod1_loss,
+            mod1_mod2_loss=mod1_mod2_loss,
+            mod2_mod1_loss=mod2_mod1_loss,
         )
 
     def encode_poe(
@@ -242,9 +216,7 @@ class SMVAE(torch.nn.Module):
         latent_poe: Latent,
         mod1_output: ModalityOutput,
         mod2_output: ModalityOutput,
-        batch_id1,
-        batch_id2,
     ):
-        mod1_poe = self.mod1.decode(mod1_output.latent_p.z + latent_poe.z, batch_id1)
-        mod2_poe = self.mod2.decode(mod2_output.latent_p.z + latent_poe.z, batch_id2)
+        mod1_poe = self.mod1.decode(mod1_output.latent_p.z + latent_poe.z)
+        mod2_poe = self.mod2.decode(mod2_output.latent_p.z + latent_poe.z)
         return mod1_poe, mod2_poe
