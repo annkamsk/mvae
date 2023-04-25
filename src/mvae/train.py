@@ -141,9 +141,10 @@ def _train(
 
             loss_calculator.calculate_private(model_input, model_output)
             loss_calculator.calculate_shared(model_input_pairs, model_output_pairs)
-            loss_calculator.calculate_batch_integration_loss(
-                model_input_pairs, model_output_pairs, device=model.device
-            )
+            if params.add_lisi_loss:
+                loss_calculator.calculate_batch_integration_loss(
+                    model_input_pairs, model_output_pairs, device=model.device
+                )
 
             loss = loss_calculator.total_loss
             loss_value = loss.item()
@@ -206,9 +207,10 @@ def test_model(
             model_output_pairs = model.forward(data_pairs)
             loss_calculator.calculate_private(data, model_output)
             loss_calculator.calculate_shared(data_pairs, model_output_pairs)
-            loss_calculator.calculate_batch_integration_loss(
-                data_pairs, model_output_pairs, device=model.device
-            )
+            if params.add_lisi_loss:
+                loss_calculator.calculate_batch_integration_loss(
+                    data_pairs, model_output_pairs, device=model.device
+                )
 
             loss_value = loss_calculator.total_loss.item()
             loss_val += loss_value
@@ -275,7 +277,7 @@ def to_latent(
     train_loader, _ = mudata_to_dataloader(
         mudata,
         batch_size=params.batch_size,
-        shuffle=params.shuffle,
+        shuffle=False,
     )
 
     poe = []

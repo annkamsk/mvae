@@ -51,14 +51,16 @@ class LossCalculator:
 
     @property
     def total_loss(self) -> torch.Tensor:
-        return self.private + self.shared + self.batch_integration
+        total = self.private + self.shared
+        if self.batch_integration:
+            total += self.private
+        return total
 
     @property
     def values(self) -> Dict[str, float]:
-        return {
+        vals = {
             "private": self.private.item(),
             "shared": self.shared.item(),
-            "batch_integration": self.batch_integration.item(),
             "mmd": self.mmd.item(),
             "rna": self.rna.item(),
             "msi": self.msi.item(),
@@ -74,6 +76,10 @@ class LossCalculator:
             "recovered_msi_poe": self.recovered_msi_poe.item(),
             "kl": self.kl.item(),
         }
+        if self.batch_integration:
+            vals["batch_integration"] = self.batch_integration.item()
+        return vals
+    
 
     def calculate_private(
         self,

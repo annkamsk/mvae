@@ -5,8 +5,8 @@ from typing import Any, Optional
 
 
 class Modality(IntEnum):
-    mod1 = 1
-    mod2 = 2
+    rna = 1
+    msi = 2
 
 
 class ObsModalityMembership(IntEnum):

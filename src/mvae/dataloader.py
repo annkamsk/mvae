@@ -1,7 +1,5 @@
 from typing import Any, Tuple, List, Optional
 
-from src.utils import setup_mudata
-
 from src.constants import BATCH_KEY, MOD_KEY, BATCH_N_KEY, CAT_COVS_KEY
 from src.mvae.types import Modality, ModelInput, ModelInputT, ObsModalityMembership
 import torch

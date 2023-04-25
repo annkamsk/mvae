@@ -241,13 +241,9 @@ class MVAE(torch.nn.Module):
         # Translation losses
         rna_msi_loss = self.msi.decode(
             msi_output.latent_p.z + rna_output.latent_s.z,
-            input["batch_id2"],
-            input["extra_categorical_covs"],
         )
         msi_rna_loss = self.rna.decode(
             rna_output.latent_p.z + msi_output.latent_s.z,
-            input["batch_id1"],
-            input["extra_categorical_covs"],
         )
 
         return ModelOutputT(
@@ -291,17 +287,9 @@ class MVAE(torch.nn.Module):
         batch_id2,
         cat_covs,
     ):
-        rna_poe = self.rna.decode(
-            rna_output.latent_p.z + latent_poe.z, batch_id1, cat_covs
-        )
-        rna_batch_free = self.rna.decode(
-            latent_poe.z + rna_output.latent_mod.z, batch_id1, cat_covs
-        )
+        rna_poe = self.rna.decode(rna_output.latent_p.z + latent_poe.z)
+        rna_batch_free = self.rna.decode(latent_poe.z + rna_output.latent_mod.z)
 
-        msi_poe = self.msi.decode(
-            msi_output.latent_p.z + latent_poe.z, batch_id2, cat_covs
-        )
-        msi_batch_free = self.msi.decode(
-            latent_poe.z + msi_output.latent_mod.z, batch_id2, cat_covs
-        )
+        msi_poe = self.msi.decode(msi_output.latent_p.z + latent_poe.z)
+        msi_batch_free = self.msi.decode(latent_poe.z + msi_output.latent_mod.z)
         return rna_poe, rna_batch_free, msi_poe, msi_batch_free
