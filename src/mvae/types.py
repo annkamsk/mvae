@@ -47,10 +47,7 @@ ModelInputT = TypedDict(
     {
         "rna": torch.Tensor,
         "msi": torch.Tensor,
-        "mod_id": int,
-        "batch_id1": torch.ByteTensor,
-        "batch_id2": torch.ByteTensor,
-        "extra_categorical_covs": torch.Tensor,
+        "batch_id": torch.ByteTensor,
     },
 )
 
@@ -59,19 +56,13 @@ ModelInputT = TypedDict(
 class ModelInput:
     rna: torch.Tensor
     msi: torch.Tensor
-    mod_id: Any
-    batch_id1: torch.ByteTensor
-    batch_id2: torch.ByteTensor
-    extra_categorical_covs: List[int]
+    batch_id: torch.ByteTensor
 
     def to_dict(self) -> ModelInputT:
         return {
             "rna": self.rna,
             "msi": self.msi,
-            "mod_id": self.mod_id,
-            "batch_id1": self.batch_id1,
-            "batch_id2": self.batch_id2,
-            "extra_categorical_covs": self.extra_categorical_covs,
+            "batch_id": self.batch_id,
         }
 
 
@@ -79,10 +70,7 @@ ModalityInputT = TypedDict(
     "ModalityInputT",
     {
         "x": torch.Tensor,
-        "mod_id": Any,
         "batch_id": torch.ByteTensor,
-        "idxs": Any,
-        "cat_covs": Optional[torch.Tensor],
     },
 )
 

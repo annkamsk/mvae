@@ -2,9 +2,7 @@ from typing import Tuple
 
 from src.model import FullyConnectedLayers, ModelParams, SamplingLayers
 
-from src.constants import BATCH_N_KEY
-
-from src.mvae.dataloader import setup_mudata
+from src.constants import BATCH_KEY, BATCH_N_KEY
 
 from src.mvae.types import (
     Modality,
@@ -15,7 +13,7 @@ from src.mvae.types import (
     ModelOutputT,
 )
 
-from src.latent import Latent, initialize_latent, prior_expert, sample_latent
+from src.latent import Latent, prior_expert, sample_latent
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -82,19 +80,11 @@ class ModalityLayers(nn.Module):
         """
         Encode data in latent space (Inference step).
         """
-        batch_id = input["batch_id"][input["idxs"], :]
-        X = torch.squeeze(input["x"][input["idxs"], :, :])
+        batch_id = input["batch_id"]
+        X = torch.squeeze(input["x"])
         y = self.encoder(X)
 
-        latent_size = (input["mod_id"].shape[0], self.params.z_dim)
-        latent_p = initialize_latent(latent_size, use_cuda=self.params.use_cuda)
-        latent_mod = initialize_latent(latent_size, use_cuda=self.params.use_cuda)
-        latent_s = initialize_latent(latent_size, use_cuda=self.params.use_cuda)
-
-        post_latent = self.sample_latent(y, batch_id)
-        for prior, post in zip([latent_p, latent_mod, latent_s], post_latent):
-            prior.update(post, input["idxs"])
-        return [latent_p, latent_mod, latent_s]
+        return self.sample_latent(y, batch_id)
 
     def sample_latent(self, y, batch_id) -> Tuple[Latent, Latent, Latent]:
         mu_s, logvar_s = self.shared_sampling(y)
@@ -167,49 +157,26 @@ class MVAE(torch.nn.Module):
     Z POE + MSI private z + MSI batch z product -> X2
     """
 
-    def __init__(
-        self,
-        mdata: MuData,
-        params: ModelParams = ModelParams(),
-        use_cuda=True,
-        **kwargs
-    ):
+    def __init__(self, mdata: MuData, params: ModelParams = ModelParams(), **kwargs):
         super(MVAE, self).__init__()
         self.params = params
-        self.device = "cuda" if use_cuda else "cpu"
+        self.device = "cuda" if params.use_cuda else "cpu"
 
-        setup_mudata(mdata)
-
-        self.n_batch_mod1 = mdata.mod[Modality.rna.name].uns[BATCH_N_KEY]
-        self.n_batch_mod2 = mdata.mod[Modality.msi.name].uns[BATCH_N_KEY]
-
-        print("N batches for mod1: ", str(self.n_batch_mod1))
-        print("N batches for mod2: ", str(self.n_batch_mod2))
+        self.n_batch = mdata.uns[BATCH_N_KEY]
 
         rna_shape = mdata.mod[Modality.rna.name].shape
         msi_shape = mdata.mod[Modality.msi.name].shape
 
-        print(rna_shape)
-        print(msi_shape)
-
-        self.rna = ModalityLayers(rna_shape[1], self.n_batch_mod1, params)
-        self.msi = ModalityLayers(msi_shape[1], self.n_batch_mod2, params)
+        self.rna = ModalityLayers(rna_shape[1], self.n_batch, params)
+        self.msi = ModalityLayers(msi_shape[1], self.n_batch, params)
         self.poe = PoE()
 
     def forward(self, input: ModelInputT) -> ModelOutputT:
-        mod_id = input["mod_id"]
-
-        mod_idxs_1 = (mod_id == 1) | (mod_id == 3)
-        mod_idxs_2 = (mod_id == 2) | (mod_id == 3)
-
         rna_output = ModalityOutput.from_dict(
             self.rna(
                 ModalityInputT(
                     x=input["rna"],
-                    mod_id=input["mod_id"],
-                    idxs=mod_idxs_1,
-                    batch_id=input["batch_id1"],
-                    cat_covs=input["extra_categorical_covs"],
+                    batch_id=input["batch_id"],
                 )
             )
         )
@@ -217,15 +184,12 @@ class MVAE(torch.nn.Module):
             self.msi(
                 ModalityInputT(
                     x=input["msi"],
-                    mod_id=input["mod_id"],
-                    idxs=mod_idxs_2,
-                    batch_id=input["batch_id2"],
-                    cat_covs=input["extra_categorical_covs"],
+                    batch_id=input["batch_id"],
                 )
             )
         )
         poe = self.encode_poe(
-            (1, mod_id.shape[0], self.params.z_dim),
+            (1, input[BATCH_KEY].shape[0], self.params.z_dim),
             rna_output.latent_s,
             msi_output.latent_s,
         )
@@ -233,16 +197,13 @@ class MVAE(torch.nn.Module):
             poe,
             rna_output,
             msi_output,
-            input["batch_id1"],
-            input["batch_id2"],
-            input["extra_categorical_covs"],
         )
 
         # Translation losses
-        rna_msi_loss = self.msi.decode(
+        msi_rna_loss = self.msi.decode(
             msi_output.latent_p.z + rna_output.latent_s.z,
         )
-        msi_rna_loss = self.rna.decode(
+        rna_msi_loss = self.rna.decode(
             rna_output.latent_p.z + msi_output.latent_s.z,
         )
 
@@ -283,9 +244,6 @@ class MVAE(torch.nn.Module):
         latent_poe: Latent,
         rna_output: ModalityOutput,
         msi_output: ModalityOutput,
-        batch_id1,
-        batch_id2,
-        cat_covs,
     ):
         rna_poe = self.rna.decode(rna_output.latent_p.z + latent_poe.z)
         rna_batch_free = self.rna.decode(latent_poe.z + rna_output.latent_mod.z)

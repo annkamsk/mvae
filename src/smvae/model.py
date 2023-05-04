@@ -58,7 +58,7 @@ class ModalityLayers(nn.Module):
     def forward(self, input: ModalityInputT) -> ModalityOutputT:
         latent_p, latent_s = self.encode(input)
 
-        X = self.decode(latent_p.z)
+        X = self.decode(latent_p.z + latent_s.z)
         return dict(
             x=X,
             latent_p=latent_p.to_dict(),
@@ -173,11 +173,10 @@ class SMVAE(torch.nn.Module):
             mod2_output,
         )
 
-        # Translation losses
-        mod1_mod2_loss = self.mod2.decode(
+        msi_rna_loss = self.mod2.decode(
             mod2_output.latent_p.z + mod1_output.latent_s.z,
         )
-        mod2_mod1_loss = self.mod1.decode(
+        rna_msi_loss = self.mod1.decode(
             mod1_output.latent_p.z + mod2_output.latent_s.z,
         )
 
@@ -185,10 +184,10 @@ class SMVAE(torch.nn.Module):
             rna=mod1_output.to_dict(),
             msi=mod2_output.to_dict(),
             poe_latent=poe.to_dict(),
-            mod1_poe=mod1_poe,
-            mod2_poe=mod2_poe,
-            mod1_mod2_loss=mod1_mod2_loss,
-            mod2_mod1_loss=mod2_mod1_loss,
+            rna_poe=mod1_poe,
+            msi_poe=mod2_poe,
+            rna_msi_loss=rna_msi_loss,
+            msi_rna_loss=msi_rna_loss,
         )
 
     def encode_poe(
@@ -217,6 +216,6 @@ class SMVAE(torch.nn.Module):
         mod1_output: ModalityOutput,
         mod2_output: ModalityOutput,
     ):
-        mod1_poe = self.mod1.decode(mod1_output.latent_p.z + latent_poe.z)
-        mod2_poe = self.mod2.decode(mod2_output.latent_p.z + latent_poe.z)
+        mod1_poe = self.mod1.decode(latent_poe.z + mod1_output.latent_p.z)
+        mod2_poe = self.mod2.decode(latent_poe.z + mod2_output.latent_p.z)
         return mod1_poe, mod2_poe

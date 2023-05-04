@@ -51,22 +51,22 @@ def extract_y(model_output: ModelOutputT):
 
 
 def train_mvae(
-    model: MVAE, mdata: MuData, params=TrainParams()
-) -> Tuple[MVAE, Dict[str, Any]]:
-    setup_mudata(mdata)
+    model: MVAE,
+    mdata: MuData,
+    params: TrainParams,
+    batch_key: str = "sample",
+) -> Dict[str, Any]:
+    batch_num = setup_mudata(mdata, batch_key)
     train_mdata, test_mdata = split_into_train_test(
         mdata,
         params.train_size,
-        sample=params.leave_sample_out,
-        batch_split=params.batch_split,
     )
-
-    train_loader, train_loader_pairs = mudata_to_dataloader(
+    train_loader = mudata_to_dataloader(
         train_mdata,
         batch_size=params.batch_size,
         shuffle=params.shuffle,
     )
-    test_loader, test_loader_pairs = mudata_to_dataloader(
+    test_loader = mudata_to_dataloader(
         test_mdata,
         batch_size=params.batch_size,
         shuffle=params.shuffle,
@@ -75,32 +75,26 @@ def train_mvae(
 
     epoch_history = _train(
         model,
-        train_loader,
-        train_loader_pairs,
-        test_loader,
-        test_loader_pairs,
-        params,
-    )
-    torch.save(
-        model.state_dict(),
-        f"mvae_params_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.pt",
+        params=params,
+        train_loader=train_loader,
+        test_loader=test_loader,
+        batch_num=batch_num,
     )
     return epoch_history
 
 
 def _train(
     model: MVAE,
+    params: TrainParams,
     train_loader: torch.utils.data.DataLoader,
-    train_loader_pairs: torch.utils.data.DataLoader,
     test_loader=None,
-    test_loader_pairs=None,
-    params: TrainParams = TrainParams(),
+    batch_num=0,
 ):
     # Initialize Tensorboard summary writer
-    writer = None
-    writer = SummaryWriter(
-        "logs/mvae" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    )
+    # params file name will have time of training start
+    params_file = params.get_params_file()
+
+    writer = SummaryWriter("logs/mvae" + params_file)
 
     epoch_hist = {"train_loss": [], "valid_loss": []}
     optimizer = optim.Adam(
@@ -112,38 +106,36 @@ def _train(
             patience=params.test_patience, verbose=True, mode="valid"
         )
 
-    # Train
+    loss_calculator = MVAE_LossCalculator(
+        beta=model.params.beta,
+        gamma=model.params.gamma,
+        delta=model.params.delta,
+        dropout=params.dropout,
+        batch_num=batch_num,
+    )
+
     it = 0
     for epoch in range(params.n_epochs):
         torch.set_num_threads(16)
         model.train()
         epoch_loss = 0
-        for model_input, model_input_pairs in tqdm(
-            zip(train_loader, train_loader_pairs), total=len(train_loader)
-        ):
+        for model_input in tqdm(train_loader, total=len(train_loader)):
             optimizer.zero_grad()
-            loss_calculator = MVAE_LossCalculator(
-                beta=model.params.beta, dropout=params.dropout
-            )
 
             # Send input to device
             model_input: ModelInputT = {
                 k: v.to(model.device) for k, v in model_input.items()
             }
-            model_input_pairs: ModelInputT = {
-                k: v.to(model.device) for k, v in model_input_pairs.items()
-            }
-
-            optimizer.zero_grad()
 
             model_output: ModelOutputT = model.forward(model_input)
-            model_output_pairs: ModelOutputT = model.forward(model_input_pairs)
 
             loss_calculator.calculate_private(model_input, model_output)
-            loss_calculator.calculate_shared(model_input_pairs, model_output_pairs)
+            loss_calculator.calculate_shared(model_input, model_output)
             if params.add_lisi_loss:
                 loss_calculator.calculate_batch_integration_loss(
-                    model_input_pairs, model_output_pairs, device=model.device
+                    model_input,
+                    model_output,
+                    on_privates=params.inverse_lisi_on_private,
                 )
 
             loss = loss_calculator.total_loss
@@ -174,49 +166,49 @@ def _train(
         if test_loader:
             torch.save(
                 model.state_dict(),
-                f"mvae_params_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.pt",
+                params_file,
             )
-            test_loss = test_model(model, test_loader, test_loader_pairs, params)
-            epoch_hist["valid_loss"].append(test_loss)
-            valid_ES(test_loss, epoch + 1)
+            test_loss = test_model(model, test_loader, params, loss_calculator)
+            epoch_hist["valid_loss"].append(test_loss["Test loss"])
+            valid_ES(test_loss["Test loss"], epoch + 1)
             if valid_ES.early_stop:
                 break
-            log_loss(writer, {"Test loss": test_loss}, epoch + 1, train=False)
+            log_loss(writer, test_loss, epoch + 1, train=False)
 
     writer.close()
     return epoch_hist
 
 
 def test_model(
-    model: MVAE, loader, loader_pairs, params: TrainParams
+    model: MVAE,
+    loader,
+    params: TrainParams,
+    loss_calculator: MVAE_LossCalculator,
 ) -> Dict[str, float]:
     model.eval()
     loss_val = 0
     i = 0
     with torch.no_grad():
-        for data, data_pairs in tqdm(zip(loader, loader_pairs), total=len(loader)):
+        for data in tqdm(loader, total=len(loader)):
             data = {k: v.to(model.device) for k, v in data.items()}
-            data_pairs = {k: v.to(model.device) for k, v in data_pairs.items()}
 
             model_output: ModelOutputT = model.forward(data)
 
-            loss_calculator = MVAE_LossCalculator(
-                beta=model.params.beta, dropout=params.dropout
-            )
-
-            model_output_pairs = model.forward(data_pairs)
             loss_calculator.calculate_private(data, model_output)
-            loss_calculator.calculate_shared(data_pairs, model_output_pairs)
+            loss_calculator.calculate_shared(data, model_output)
             if params.add_lisi_loss:
                 loss_calculator.calculate_batch_integration_loss(
-                    data_pairs, model_output_pairs, device=model.device
+                    data, model_output, on_privates=params.inverse_lisi_on_private
                 )
 
             loss_value = loss_calculator.total_loss.item()
             loss_val += loss_value
             i += 1
 
-    return loss_val / i
+    return {
+        "Test loss": loss_val / i,
+        "batch_integration_loss": loss_calculator.values.get("batch_integration", 0),
+    }
 
 
 def predict(
@@ -274,7 +266,7 @@ def to_latent(
     Projects data into latent space. Inspired by SCVI.
     """
     model.to(model.device)
-    train_loader, _ = mudata_to_dataloader(
+    train_loader = mudata_to_dataloader(
         mudata,
         batch_size=params.batch_size,
         shuffle=False,

@@ -81,6 +81,8 @@ def _train(
     it = 0
     loss_calculator = LossCalculator(
         beta=model.params.beta,
+        gamma=model.params.gamma,
+        delta=model.params.delta,
         dropout=params.dropout,
         batch_num=batch_num,
         summary_writer=writer,
@@ -103,7 +105,9 @@ def _train(
             loss_calculator.calculate_shared(model_input, model_output)
             if params.add_lisi_loss:
                 loss_calculator.calculate_batch_integration_loss(
-                    model_input, model_output
+                    model_input,
+                    model_output,
+                    on_privates=params.inverse_lisi_on_private,
                 )
 
             loss = loss_calculator.total_loss
@@ -168,7 +172,9 @@ def test_model(
             loss_calculator.calculate_shared(data, model_output)
 
             if params.add_lisi_loss:
-                loss_calculator.calculate_batch_integration_loss(data, model_output)
+                loss_calculator.calculate_batch_integration_loss(
+                    data, model_output, on_privates=params.inverse_lisi_on_private
+                )
 
             loss_value = loss_calculator.total_loss.item()
             loss_val += loss_value
@@ -181,14 +187,14 @@ def test_model(
 
 
 def extract_latent(model_output: ModelOutputT):
-    mod1_output = ModalityOutput.from_dict(model_output[Modality.rna.name])
-    mod2_output = ModalityOutput.from_dict(model_output[Modality.msi.name])
+    rna_output = ModalityOutput.from_dict(model_output[Modality.rna.name])
+    msi_output = ModalityOutput.from_dict(model_output[Modality.msi.name])
     return {
         "poe": model_output["poe_latent"]["z"].cpu(),
-        "mod1_p": mod1_output.latent_p.z.cpu().numpy(),
-        "mod1_s": mod1_output.latent_s.z.cpu().numpy(),
-        "mod2_p": mod2_output.latent_p.z.cpu().numpy(),
-        "mod2_s": mod2_output.latent_s.z.cpu().numpy(),
+        "rna_p": rna_output.latent_p.z.cpu().numpy(),
+        "rna_s": rna_output.latent_s.z.cpu().numpy(),
+        "msi_p": msi_output.latent_p.z.cpu().numpy(),
+        "msi_s": msi_output.latent_s.z.cpu().numpy(),
     }
 
 
@@ -196,12 +202,12 @@ def extract_y(model_output: ModelOutputT):
     mod1_output = ModalityOutput.from_dict(model_output[Modality.rna.name])
     mod2_output = ModalityOutput.from_dict(model_output[Modality.msi.name])
     return {
-        "mod1_poe": model_output["mod1_poe"].detach().cpu(),
-        "mod2_poe": model_output["mod2_poe"].detach().cpu(),
-        "mod1": mod1_output.x.detach().cpu(),
-        "mod2": mod2_output.x.detach().cpu(),
-        "mod1_mod2_loss": model_output["mod1_mod2_loss"].detach().cpu(),
-        "mod2_mod1_loss": model_output["mod2_mod1_loss"].detach().cpu(),
+        "rna_poe": model_output["rna_poe"].detach().cpu(),
+        "msi_poe": model_output["msi_poe"].detach().cpu(),
+        "rna": mod1_output.x.detach().cpu(),
+        "msi": mod2_output.x.detach().cpu(),
+        "rna_msi_loss": model_output["rna_msi_loss"].detach().cpu(),
+        "msi_rna_loss": model_output["msi_rna_loss"].detach().cpu(),
     }
 
 
@@ -268,10 +274,10 @@ def to_latent(
     )
 
     poe = []
-    mod1_p = []
-    mod2_p = []
-    mod1_s = []
-    mod2_s = []
+    rna_p = []
+    msi_p = []
+    rna_s = []
+    msi_s = []
 
     with torch.no_grad():
         model.eval()
@@ -280,9 +286,9 @@ def to_latent(
             model_output = model.forward(tensors)
             latent = extract_latent(model_output)
             poe.append(latent["poe"])
-            mod1_p.append(latent["mod1_p"])
-            mod2_p.append(latent["mod2_p"])
-            mod1_s.append(latent["mod1_s"])
-            mod2_s.append(latent["mod2_s"])
+            rna_p.append(latent["rna_p"])
+            msi_p.append(latent["msi_p"])
+            rna_s.append(latent["rna_s"])
+            msi_s.append(latent["msi_s"])
 
-    return poe, mod1_p, mod2_p, mod1_s, mod2_s
+    return poe, rna_p, msi_p, rna_s, msi_s

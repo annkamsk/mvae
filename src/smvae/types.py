@@ -45,13 +45,13 @@ ModalityInputT = TypedDict(
 ModelOutputT = TypedDict(
     "ModelOutputT",
     {
-        "mod1": "ModalityOutputT",
-        "mod2": "ModalityOutputT",
+        "rna": "ModalityOutputT",
+        "msi": "ModalityOutputT",
         "poe_latent": LatentT,
-        "mod1_poe": torch.Tensor,
-        "mod2_poe": torch.Tensor,
-        "mod1_mod2_loss": torch.Tensor,
-        "mod2_mod1_loss": torch.Tensor,
+        "rna_poe": torch.Tensor,
+        "msi_poe": torch.Tensor,
+        "rna_msi_loss": torch.Tensor,
+        "msi_rna_loss": torch.Tensor,
     },
 )
 

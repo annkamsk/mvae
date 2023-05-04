@@ -1,8 +1,8 @@
 from typing import Callable, Dict
 
-from src.loss import get_loss_fun, mmd, mse, compute_lisi
+from src.constants import BATCH_KEY
 
-from src.harmony import harmonize
+from src.loss import get_loss_fun, mse, compute_lisi, nearest_neighbors
 
 from src.latent import Latent
 
@@ -11,20 +11,23 @@ from src.mvae.types import (
     ModalityOutput,
     ModelInputT,
     ModelOutputT,
-    ObsModalityMembership,
 )
 import torch
-from torch.autograd import Variable
 
 
 class LossCalculator:
     private = None
     shared = None
     batch_integration = None
-
-    mmd = None
+    batch_integration_rna = None
+    batch_integration_msi = None
+    batch_loss = None
     rna = None
     msi = None
+    rna_poe = None
+    msi_poe = None
+    rna_msi_loss = None
+    msi_rna_loss = None
     rna_kl_p = None
     rna_kl_mod = None
     rna_kl_s = None
@@ -35,19 +38,24 @@ class LossCalculator:
     loss_rna_msi = None
     loss_msi_rna = None
 
-    recovered_rna_poe = None
-    recovered_msi_poe = None
-
     kl = None
 
     beta: float
+    gamma: float = 1.0
+    delta: float = 0.1
     loss_function: Callable = mse
     dropout: bool = False
+    batch_num: int = 0
 
-    def __init__(self, beta, loss_function="mse", dropout=True):
+    def __init__(
+        self, beta, gamma=1.0, delta=1.0, loss_function="mse", dropout=True, batch_num=0
+    ):
         self.beta = beta
+        self.gamma = gamma
+        self.delta = delta
         self.loss_function = get_loss_fun(loss_function)
         self.dropout = dropout
+        self.batch_num = batch_num
 
     @property
     def total_loss(self) -> torch.Tensor:
@@ -61,52 +69,48 @@ class LossCalculator:
         vals = {
             "private": self.private.item(),
             "shared": self.shared.item(),
-            "mmd": self.mmd.item(),
-            "rna": self.rna.item(),
-            "msi": self.msi.item(),
-            "rna_kl_p": self.rna_kl_p.item(),
-            "rna_kl_mod": self.rna_kl_mod.item(),
-            "rna_kl_s": self.rna_kl_s.item(),
-            "msi_kl_p": self.msi_kl_p.item(),
-            "msi_kl_mod": self.msi_kl_mod.item(),
-            "msi_kl_s": self.msi_kl_s.item(),
-            "loss_rna_msi": self.loss_rna_msi.item(),
+            "rna_mse": self.rna.item(),
+            "msi_mse": self.msi.item(),
+            "recovered_rna_poe": self.rna_poe.item(),
+            "recovered_msi_poe": self.msi_poe.item(),
             "loss_msi_rna": self.loss_msi_rna.item(),
-            "recovered_rna_poe": self.recovered_rna_poe.item(),
-            "recovered_msi_poe": self.recovered_msi_poe.item(),
+            "loss_rna_msi": self.loss_rna_msi.item(),
+            "kl_rna_p": self.rna_kl_p.item(),
+            "kl_rna_mod": self.rna_kl_mod.item(),
+            "kl_rna_s": self.rna_kl_s.item(),
+            "kl_msi_p": self.msi_kl_p.item(),
+            "kl_msi_mod": self.msi_kl_mod.item(),
+            "kl_msi_s": self.msi_kl_s.item(),
             "kl": self.kl.item(),
         }
         if self.batch_integration:
             vals["batch_integration"] = self.batch_integration.item()
+            vals["batch_loss"] = self.batch_loss.item()
+            if self.batch_integration_rna and self.batch_integration_msi:
+                vals["batch_integration_rna"] = self.batch_integration_rna.item()
+                vals["batch_integration_msi"] = self.batch_integration_msi.item()
         return vals
-    
 
     def calculate_private(
         self,
         model_input: ModelInputT,
         model_output: ModelOutputT,
     ) -> None:
-        mod = model_input["mod_id"]
         rna_output = ModalityOutput.from_dict(model_output[Modality.rna.name])
         msi_output = ModalityOutput.from_dict(model_output[Modality.msi.name])
-        rna_idxs = (mod == ObsModalityMembership.ONLY_MOD1) | (
-            mod == ObsModalityMembership.PAIRED
-        )
-        msi_idxs = (mod == ObsModalityMembership.ONLY_MOD2) | (
-            mod == ObsModalityMembership.PAIRED
-        )
+
         (
             self.rna,
             self.rna_kl_p,
             self.rna_kl_mod,
             self.rna_kl_s,
-        ) = self._loss_mod(model_input[Modality.rna.name], rna_output, rna_idxs)
+        ) = self._loss_mod(model_input[Modality.rna.name], rna_output)
         (
             self.msi,
             self.msi_kl_p,
             self.msi_kl_mod,
             self.msi_kl_s,
-        ) = self._loss_mod(model_input[Modality.msi.name], msi_output, msi_idxs)
+        ) = self._loss_mod(model_input[Modality.msi.name], msi_output)
 
         self.private = (
             self.rna
@@ -118,7 +122,6 @@ class LossCalculator:
         self,
         modality_input,
         modality_output: ModalityOutput,
-        mod_idxs,
     ):
         """
         Calculates private loss components (MSE and KL) for one modality.
@@ -127,8 +130,8 @@ class LossCalculator:
         kld_mod = modality_output.latent_mod.kld()
         kld_s = modality_output.latent_s.kld()
 
-        x_pred = modality_output.x[mod_idxs]
-        x_real = torch.squeeze(modality_input[mod_idxs])
+        x_pred = modality_output.x
+        x_real = torch.squeeze(modality_input)
 
         loss = self.loss_function(x_pred, x_real, self.dropout)
         return (
@@ -141,85 +144,46 @@ class LossCalculator:
     def calculate_shared(
         self, model_input: ModelInputT, model_output: ModelOutputT
     ) -> None:
-        """
-        Initializes Maximum Mean Discrepancy(MMD) between model_input and output.
-        - Gretton, Arthur, et al. "A Kernel Two-Sample Test". 2012.
-        """
-        rna_output = ModalityOutput.from_dict(model_output[Modality.rna.name])
-        msi_output = ModalityOutput.from_dict(model_output[Modality.msi.name])
-        mod = model_input["mod_id"]
-        rna_idxs = (mod == ObsModalityMembership.ONLY_MOD1) | (
-            mod == ObsModalityMembership.PAIRED
-        )
-        msi_idxs = (mod == ObsModalityMembership.ONLY_MOD2) | (
-            mod == ObsModalityMembership.PAIRED
-        )
         rna_real = torch.squeeze(model_input[Modality.rna.name])
         msi_real = torch.squeeze(model_input[Modality.msi.name])
 
-        self.loss_rna_msi = torch.mean(
+        self.rna_poe = torch.mean(
             self.loss_function(
-                model_output["rna_msi_loss"][msi_idxs],
-                msi_real[msi_idxs],
+                model_output["rna_poe"],
+                rna_real,
                 dropout=self.dropout,
             )
         )
-        self.loss_msi_rna = torch.mean(
+        self.msi_poe = torch.mean(
             self.loss_function(
-                model_output["msi_rna_loss"][rna_idxs],
-                rna_real[rna_idxs],
+                model_output["msi_poe"],
+                msi_real,
                 dropout=self.dropout,
             )
         )
 
-        self.recovered_rna_poe = torch.mean(
+        self.loss_msi_rna = torch.mean(
             self.loss_function(
-                model_output["rna_poe"][rna_idxs],
-                rna_real[rna_idxs],
+                model_output["msi_rna_loss"],
+                msi_real,
                 dropout=self.dropout,
             )
         )
-        self.recovered_msi_poe = torch.mean(
+        self.loss_rna_msi = torch.mean(
             self.loss_function(
-                model_output["msi_poe"][msi_idxs],
-                msi_real[msi_idxs],
+                model_output["rna_msi_loss"],
+                rna_real,
                 dropout=self.dropout,
             )
         )
 
         self.kl = self.beta * torch.mean(Latent(**model_output["poe_latent"]).kld())
 
-        alphas = [
-            1e-6,
-            1e-5,
-            1e-4,
-            1e-3,
-            1e-2,
-            1e-1,
-            1,
-            5,
-            10,
-            15,
-            20,
-            25,
-            30,
-            35,
-            100,
-            1e3,
-            1e4,
-            1e5,
-            1e6,
-        ]
-
-        alphas = Variable(torch.FloatTensor(alphas)).to(device=torch.device("cuda"))
-
-        self.mmd = mmd(rna_output.latent_s.z, msi_output.latent_s.z, alphas)
-
         self.shared = (
             self.loss_rna_msi
             + self.loss_msi_rna
-            + self.recovered_rna_poe
-            + self.recovered_msi_poe
+            + self.rna_poe
+            + self.msi_poe
             + self.kl
         )
 
@@ -227,17 +191,66 @@ class LossCalculator:
         self,
         input: ModelInputT,
         output: ModelOutputT,
+        on_privates: bool = False,
         perplexity: float = 30,
-        device="cuda",
     ):
         """
         Tries to correct the POE latent space for batch effects with Harmony and calculates loss
         as LISI (Local Inverse Simpson Index) score.
         """
-        batch_id = input["batch_id1"]
-        poe = output["poe_latent"]["z"]
+        latent = output["poe_latent"]["z"]
 
-        # poe_corrected = harmonize(poe, batch_id, device_type=device)
-        self.batch_integration = 1 / compute_lisi(
-            poe, batch_id, perplexity, self.summary_writer
+        n_neighbors = min(3 * perplexity, latent.shape[0] - 1)
+        neighbors = nearest_neighbors(latent, n_neighbors)
+
+        self.batch_loss = torch.nansum(
+            1
+            / compute_lisi(
+                neighbors,
+                input[BATCH_KEY],
+                self.batch_num,
+                perplexity,
+            )
+        )
+        if not on_privates:
+            self.batch_integration = self.gamma * self.batch_loss
+            return
+
+        self.batch_integration_msi = self._batch_integration_mod(
+            input[BATCH_KEY],
+            ModalityOutput.from_dict(output[Modality.msi.name]),
+            perplexity,
+        )
+        self.batch_integration_rna = self._batch_integration_mod(
+            input[BATCH_KEY],
+            ModalityOutput.from_dict(output[Modality.rna.name]),
+            perplexity,
+        )
+
+        self.batch_integration = self.gamma * self.batch_loss + self.delta * (
+            self.batch_integration_msi + self.batch_integration_rna
+        )
+
+    def _batch_integration_mod(
+        self,
+        batch_id,
+        modality_output: ModalityOutput,
+        perplexity: float = 30,
+    ):
+        """
+        Calculates INVERSE batch integration loss for one modality.
+        """
+        latent = modality_output.latent_p.z
+
+        n_neighbors = min(3 * perplexity, latent.shape[0] - 1)
+        neighbors = nearest_neighbors(latent, n_neighbors)
+
+        return 1 / torch.nansum(
+            1
+            / compute_lisi(
+                neighbors,
+                batch_id,
+                self.batch_num,
+                perplexity,
+            )
         )

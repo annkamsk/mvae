@@ -1,7 +1,4 @@
-import datetime
 from typing import Dict, List, Optional, Tuple
-
-from src.constants import BATCH_N_KEY
 
 from src.vae.types import VAEInputT, VAEOutputT
 
@@ -96,6 +93,7 @@ def _train(
     it = 0
     loss_calculator = VAE_LossCalculator(
         beta=model.params.beta,
+        gamma=model.params.gamma,
         dropout=params.dropout,
         batch_key_dict=batch_key_setup,
         summary_writer=writer,

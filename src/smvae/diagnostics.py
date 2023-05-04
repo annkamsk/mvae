@@ -16,14 +16,13 @@ def umap(
     train_params: TrainParams = TrainParams(),
     poe_only: bool = True,
 ):
-    poe, mod1_p, mod2_p, mod1_s, mod2_s = to_latent(
-        model, mdata, batch_key, train_params
-    )
+    poe, rna_p, msi_p, rna_s, msi_s = to_latent(model, mdata, batch_key, train_params)
+
     if not poe_only:
-        mdata.obsm["z1_s"] = np.vstack(mod1_s)
-        mdata.obsm["z2_s"] = np.vstack(mod2_s)
-        mdata.obsm["z1_p"] = np.vstack(mod1_p)
-        mdata.obsm["z2_p"] = np.vstack(mod2_p)
+        mdata.obsm["z1_s"] = np.vstack(rna_s)
+        mdata.obsm["z2_s"] = np.vstack(msi_s)
+        mdata.obsm["z1_p"] = np.vstack(rna_p)
+        mdata.obsm["z2_p"] = np.vstack(msi_p)
 
         for layer in ["z1_s", "z2_s", "z1_p", "z2_p"]:
             sc.pp.neighbors(
@@ -43,7 +42,7 @@ def plot_embedding(
     model: SMVAE,
     mdata: MuData,
     batch_key: str = "sample",
-    keys: List[str] = ["tissue", "ann", "sample"],
+    keys: List[str] = ["tissue", "new_ann", "sample"],
     train_params: TrainParams = TrainParams(),
     leiden_res: float = 0.8,
     poe_only: bool = True,
@@ -63,7 +62,7 @@ def plot_embedding(
 
 def classification_performance(
     mdata: MuData,
-    label_key: str = "ann",
+    label_key: str = "new_ann",
     embed_key: str = "X_mvae",
     test_size: float = 0.33,
     loo: str = "",

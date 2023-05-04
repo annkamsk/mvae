@@ -20,6 +20,7 @@ from src.latent import Latent
 class LossCalculator:
     private = None
     batch_integration = None
+    batch_integration_scale = None
     batch_losses = {}
     spatial = None
     x = None
@@ -27,7 +28,7 @@ class LossCalculator:
 
     summary_writer: Any
     beta: float
-    gamma: float = None  # parameter scaling batch integration loss
+    gamma: float = 1.0  # proportion between LISI los and private loss
     loss_function: Callable = mse
     dropout: bool = False
     batch_key_dict: Dict[str, Tuple[str, int]] = {}
@@ -114,10 +115,11 @@ class LossCalculator:
         # self.spatial = compute_spatial_loss(indices, model_input["neighbors"])
 
         # poe_corrected = harmonize(latent, batch_id)
-        self.batch_integration = (self.gamma or 1.0) * torch.stack(
-            tuple(self.batch_losses.values())
-        ).sum()
+        batch_integration = torch.stack(tuple(self.batch_losses.values())).sum()
 
-        if not self.gamma:
-            self.gamma = 0.1 * self.private.item() / self.batch_integration.item()
-            self.batch_integration = self.gamma * self.batch_integration
+        if self.batch_integration_scale is None:
+            self.batch_integration_scale = (
+                self.gamma * self.private.item() / batch_integration.item()
+            )
+
+        self.batch_integration = self.batch_integration_scale * batch_integration

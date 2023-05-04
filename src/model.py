@@ -9,6 +9,8 @@ class ModelParams:
     n_hidden: int = 800
     z_dim: int = 200
     beta: float = 0.1  # KL divergence term hyperparam for MVAE
+    gamma: float = 1.0  # scaling factor for LISI loss on PoE
+    delta: float = 0.1  # scaling factor for LISI loss on private
     dropout: float = 0.1
     z_dropout: float = 0.3
     encode_covariates: bool = False
