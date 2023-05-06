@@ -61,7 +61,7 @@ class LossCalculator:
     def total_loss(self) -> torch.Tensor:
         total = self.private + self.shared
         if self.batch_integration:
-            total += self.private
+            total += self.batch_integration
         return total
 
     @property

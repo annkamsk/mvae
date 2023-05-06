@@ -65,6 +65,7 @@ class ModalityLayers(nn.Module):
     def forward(self, input: ModalityInputT) -> ModalityOutputT:
         latent_p, latent_mod, latent_s = self.encode(input)
 
+        # X = self.decode(latent_p.z + latent_mod.z + latent_s.z)
         X = self.decode(latent_p.z + latent_mod.z)
         return dict(
             x=X,
@@ -245,9 +246,15 @@ class MVAE(torch.nn.Module):
         rna_output: ModalityOutput,
         msi_output: ModalityOutput,
     ):
+        # rna_poe = self.rna.decode(
+        #     rna_output.latent_p.z + latent_poe.z + rna_output.latent_mod.z
+        # )
         rna_poe = self.rna.decode(rna_output.latent_p.z + latent_poe.z)
         rna_batch_free = self.rna.decode(latent_poe.z + rna_output.latent_mod.z)
 
+        # msi_poe = self.msi.decode(
+        #     msi_output.latent_p.z + latent_poe.z + msi_output.latent_mod.z
+        # )
         msi_poe = self.msi.decode(msi_output.latent_p.z + latent_poe.z)
         msi_batch_free = self.msi.decode(latent_poe.z + msi_output.latent_mod.z)
         return rna_poe, rna_batch_free, msi_poe, msi_batch_free

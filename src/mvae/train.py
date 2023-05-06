@@ -32,6 +32,8 @@ def extract_latent(model_output: ModelOutputT):
         "msi_p": msi_output.latent_p.z.cpu().numpy(),
         "msi_mod": msi_output.latent_mod.z.cpu().numpy(),
         "msi_s": msi_output.latent_s.z.cpu().numpy(),
+        "rna_batch_free": model_output["rna_batch_free"].detach().cpu(),
+        "msi_batch_free": model_output["msi_batch_free"].detach().cpu(),
     }
 
 
@@ -279,6 +281,8 @@ def to_latent(
     msi_mod = []
     rna_s = []
     msi_s = []
+    rna_batch_free = []
+    msi_batch_free = []
 
     with torch.no_grad():
         model.eval()
@@ -293,5 +297,17 @@ def to_latent(
             msi_mod.append(latent["msi_mod"])
             rna_s.append(latent["rna_s"])
             msi_s.append(latent["msi_s"])
+            rna_batch_free.append(latent["rna_batch_free"])
+            msi_batch_free.append(latent["msi_batch_free"])
 
-    return poe, rna_p, msi_p, rna_mod, msi_mod, rna_s, msi_s
+    return (
+        poe,
+        rna_p,
+        msi_p,
+        rna_mod,
+        msi_mod,
+        rna_s,
+        msi_s,
+        rna_batch_free,
+        msi_batch_free,
+    )

@@ -15,9 +15,17 @@ def umap(
     train_params: TrainParams = TrainParams(),
     poe_only: bool = True,
 ):
-    poe, rna_p, msi_p, rna_mod, msi_mod, rna_s, msi_s = to_latent(
-        model, mdata, train_params
-    )
+    (
+        poe,
+        rna_p,
+        msi_p,
+        rna_mod,
+        msi_mod,
+        rna_s,
+        msi_s,
+        rna_batch_free,
+        msi_batch_free,
+    ) = to_latent(model, mdata, train_params)
     if not poe_only:
         mdata.obsm["z1_s"] = np.vstack(rna_s)
         mdata.obsm["z2_s"] = np.vstack(msi_s)
@@ -25,8 +33,19 @@ def umap(
         mdata.obsm["z2_p"] = np.vstack(msi_p)
         mdata.obsm["z1_mod"] = np.vstack(rna_mod)
         mdata.obsm["z2_mod"] = np.vstack(msi_mod)
+        mdata.obsm["z1_batch_free"] = np.vstack(rna_batch_free)
+        mdata.obsm["z2_batch_free"] = np.vstack(msi_batch_free)
 
-        for layer in ["z1_s", "z2_s", "z1_p", "z2_p", "z1_mod", "z2_mod"]:
+        for layer in [
+            "z1_s",
+            "z2_s",
+            "z1_p",
+            "z2_p",
+            "z1_mod",
+            "z2_mod",
+            "z1_batch_free",
+            "z2_batch_free",
+        ]:
             sc.pp.neighbors(
                 mdata, n_neighbors=5, use_rep=layer, key_added=f"neigh_{layer}"
             )
