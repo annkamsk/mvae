@@ -75,22 +75,23 @@ def make_plot(data: pd.DataFrame, columns=[], title="") -> None:
         "PoE_training/msi_mse": "MSI MSE",
         "PoE_training/private": "Private loss",
         "PoE_training/shared": "Shared loss",
-        "PoE_training/rna_kl_p": "RNA KL p",
-        "PoE_training/rna_kl_mod": "RNA KL mod",
-        "PoE_training/rna_kl_s": "RNA KL s",
-        "PoE_training/msi_kl_p": "MSI KL p",
-        "PoE_training/msi_kl_mod": "MSI KL mod",
-        "PoE_training/msi_kl_s": "MSI KL s",
+        "PoE_training/kl_rna_p": "RNA KL p",
+        "PoE_training/kl_rna_mod": "RNA KL mod",
+        "PoE_training/kl_rna_s": "RNA KL s",
+        "PoE_training/kl_msi_p": "MSI KL p",
+        "PoE_training/kl_msi_mod": "MSI KL mod",
+        "PoE_training/kl_msi_s": "MSI KL s",
         "PoE_training/recovered_rna_poe": "RNA recovered from PoE",
         "PoE_training/recovered_msi_poe": "MSI recovered from PoE",
         "PoE_training/loss_msi_rna": "Translation loss MSI -> RNA",
         "PoE_training/loss_rna_msi": "Translation loss RNA -> MSI",
     }
-    n_col = 2
-    n_row = int((len(columns) + 1) / n_col)
-    fig_height = {1: 6, 2: 10, 3: 10, 4: 15}
-    fig, axes = plt.subplots(n_row, n_col, sharex=True, figsize=(20, fig_height[n_row]))
+    n_col = 3
+    n_row = int((len(columns) + (n_col - 1)) / n_col)
+    fig_height = {1: 5, 2: 10, 3: 10, 4: 15}
+    fig, axes = plt.subplots(n_row, n_col, sharex=True, figsize=(25, fig_height[n_row]))
     fig.suptitle(title, fontsize=15)
+    fig.subplots_adjust(wspace=0.3, top=0.8)
 
     if n_row < 2:
         for col in range(n_col):
@@ -123,8 +124,4 @@ def get_loss_logs(model: str):
         event_list = event_acc.Scalars(tag)
         runlog_data[tag] = np.asarray(map(lambda x: x.value, event_list))
 
-    if "PoE_training/batch_integration" in tags:
-        runlog_data["total_minus_bi"] = (
-            runlog_data["PoE_training/private"] + runlog_data["PoE_training/shared"]
-        )
     return runlog_data

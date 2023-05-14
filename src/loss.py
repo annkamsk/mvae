@@ -1,6 +1,10 @@
+import numpy as np
+import pandas as pd
+from scipy.stats import chi2
 import torch
 import torch.nn.functional as F
 from typing import Tuple
+from mudata import MuData
 
 
 def get_loss_fun(loss_fun: str):
@@ -242,3 +246,112 @@ def compute_spatial_loss(
         spatial_loss += neigh_cat[torch.where(counts.gt(1))].count_nonzero(0)
 
     return 1 / spatial_loss
+
+
+def calc_kBET(
+    data: MuData,
+    batch_key: str,
+    rep: str = "pca",
+    K: int = 25,
+    alpha: float = 0.05,
+    n_jobs: int = -1,
+    random_state: int = 0,
+    temp_folder: str = None,
+    use_cache: bool = True,
+) -> Tuple[float, float, float]:
+    """Calculate the kBET metric of the data regarding a specific sample attribute and embedding.
+    https://github.com/lilab-bcb/pegasus
+    The kBET metric is defined in [Büttner18]_, which measures if cells from different samples mix well in their local neighborhood.
+
+    attr: ``str``
+        The sample attribute to consider. Must exist in ``data.obs``.
+
+    rep: ``str``, optional, default: ``"pca"``
+        The embedding representation to be used. The key ``'X_' + rep`` must exist in ``data.obsm``. By default, use PCA coordinates.
+
+    K: ``int``, optional, default: ``25``
+        Number of nearest neighbors, using L2 metric.
+
+    alpha: ``float``, optional, default: ``0.05``
+        Acceptance rate threshold. A cell is accepted if its kBET p-value is greater than or equal to ``alpha``.
+
+    Returns
+    -------
+    stat_mean: ``float``
+        Mean kBET chi-square statistic over all cells.
+
+    pvalue_mean: ``float``
+        Mean kBET p-value over all cells.
+
+    accept_rate: ``float``
+        kBET Acceptance rate of the sample.
+    """
+    ideal_dist = (
+        data.obs[batch_key].value_counts(normalize=True, sort=False).values
+    )  # ideal no batch effect distribution
+    nsample = data.shape[0]
+    nbatch = ideal_dist.size
+
+    attr_values = data.obs[batch_key].values.copy()
+
+    X = torch.tensor(data.obsm[f"{rep}_z"], device="cuda")
+
+    _, indices = nearest_neighbors(X, K)
+    indices_np = indices.cpu().numpy().astype(int)
+
+    knn_indices = np.concatenate(
+        (np.arange(nsample).reshape(-1, 1), indices_np[:, 0 : K - 1]), axis=1
+    )  # add query as 1-nn
+
+    # partition into chunks
+    n_jobs = min(16, nsample)
+    starts = np.zeros(n_jobs + 1, dtype=int)
+    quotient = nsample // n_jobs
+    remainder = nsample % n_jobs
+    for i in range(n_jobs):
+        starts[i + 1] = starts[i] + quotient + (1 if i < remainder else 0)
+
+    from joblib import Parallel, delayed, parallel_backend
+
+    with parallel_backend("loky", inner_max_num_threads=1):
+        kBET_arr = np.concatenate(
+            Parallel(n_jobs=n_jobs, temp_folder=temp_folder)(
+                delayed(calc_kBET_for_one_chunk)(
+                    knn_indices[starts[i] : starts[i + 1], :],
+                    attr_values,
+                    ideal_dist,
+                    K,
+                )
+                for i in range(n_jobs)
+            )
+        )
+
+    res = kBET_arr.mean(axis=0)
+    stat_mean = res[0]
+    pvalue_mean = res[1]
+    accept_rate = (kBET_arr[:, 1] >= alpha).sum() / nsample
+
+    return (stat_mean, pvalue_mean, accept_rate)
+
+
+def calc_kBET_for_one_chunk(knn_indices, attr_values, ideal_dist, K):
+    dof = ideal_dist.size - 1
+
+    ns = knn_indices.shape[0]
+    results = np.zeros((ns, 2))
+    for i in range(ns):
+        observed_counts = (
+            pd.Series(attr_values[knn_indices[i, :]]).value_counts(sort=False).values
+        )
+        expected_counts = ideal_dist * K
+        stat = np.sum(
+            np.divide(
+                np.square(np.subtract(observed_counts, expected_counts)),
+                expected_counts,
+            )
+        )
+        p_value = 1 - chi2.cdf(stat, dof)
+        results[i, 0] = stat
+        results[i, 1] = p_value
+
+    return results
