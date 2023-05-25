@@ -110,8 +110,13 @@ def make_plot(data: pd.DataFrame, columns=[], title="") -> None:
             axes[row][col].set_ylabel("")
 
 
-def get_loss_logs(model: str):
-    path = str(Path(__file__).parent.parent / "logs" / "smvaevae_params" / model)
+def get_loss_logs(model: str, mvae: bool = False):
+    path = str(
+        Path(__file__).parent.parent
+        / "logs"
+        / ("mvaevae_params" if mvae else "smvaevae_params")
+        / model
+    )
     event_acc = EventAccumulator(path, DEFAULT_SIZE_GUIDANCE)
     event_acc.Reload()
     tags = event_acc.Tags()["scalars"]

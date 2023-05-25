@@ -6,9 +6,9 @@ import numpy as np
 import torch
 from src.types import TrainParams
 from src.loss import compute_lisi
-from src.vae.model import VAE
+from src.vae.model import VAE, VAEB
 from anndata import AnnData
-from src.vae.train import to_latent, predict
+from src.vae.train import to_latent, predict, to_latent_vaeb
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 
@@ -29,7 +29,7 @@ def umap(model: VAE, adata: AnnData, batch_keys: List[str], train_params=TrainPa
 def plot_embedding(
     model: VAE,
     adata: AnnData,
-    keys: List[str] = ["tissue", "ann", "sample"],
+    keys: List[str] = ["tissue", "new_ann", "sample"],
     batch_keys: str = ["sample"],
     train_params: TrainParams = TrainParams(),
     leiden_res: float = 0.8,
@@ -41,7 +41,7 @@ def plot_embedding(
     sc.pl.embedding(
         adata,
         "X_vae",
-        color=[f"r{leiden_res}", *keys],
+        color=keys,
         size=15,
         wspace=0.35,
     )
@@ -49,7 +49,7 @@ def plot_embedding(
 
 def classification_performance(
     adata: AnnData,
-    label_key: str = "ann",
+    label_key: str = "new_ann",
     embed_key: str = "X_vae",
     test_size: float = 0.33,
     loo: str = "",
@@ -126,3 +126,38 @@ def plot_spatial(
             title=s,
             wspace=0.35,
         )
+
+
+def plot_embedding_vaeb(
+    model: VAEB,
+    adata: AnnData,
+    keys: List[str] = ["sample", "tissue", "new_ann"],
+    batch_keys: str = ["sample"],
+    train_params: TrainParams = TrainParams(),
+):
+    emb_b, emb_mod = to_latent_vaeb(model, adata, batch_keys, train_params)
+
+    adata.obsm["z_b"] = np.vstack([x.numpy() for x in emb_b])
+    adata.obsm["z_mod"] = np.vstack([x.numpy() for x in emb_mod])
+    sc.pp.neighbors(adata, n_neighbors=5, use_rep="z_b", key_added=f"neigh_z_b")
+    sc.tl.umap(adata, neighbors_key=f"neigh_z_b")
+    adata.obsm["X_z_b"] = adata.obsm["X_umap"]
+
+    sc.pp.neighbors(adata, use_rep="z_mod", key_added=f"neigh_z_mod")
+    sc.tl.umap(adata, neighbors_key=f"neigh_z_mod")
+    adata.obsm["X_z_mod"] = adata.obsm["X_umap"]
+
+    sc.pl.embedding(
+        adata,
+        "X_z_mod",
+        color=keys,
+        size=15,
+        wspace=0.35,
+    )
+    sc.pl.embedding(
+        adata,
+        "X_z_b",
+        color=keys,
+        size=15,
+        wspace=0.35,
+    )

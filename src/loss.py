@@ -255,9 +255,7 @@ def calc_kBET(
     K: int = 25,
     alpha: float = 0.05,
     n_jobs: int = -1,
-    random_state: int = 0,
     temp_folder: str = None,
-    use_cache: bool = True,
 ) -> Tuple[float, float, float]:
     """Calculate the kBET metric of the data regarding a specific sample attribute and embedding.
     https://github.com/lilab-bcb/pegasus
@@ -290,11 +288,9 @@ def calc_kBET(
         data.obs[batch_key].value_counts(normalize=True, sort=False).values
     )  # ideal no batch effect distribution
     nsample = data.shape[0]
-    nbatch = ideal_dist.size
-
     attr_values = data.obs[batch_key].values.copy()
 
-    X = torch.tensor(data.obsm[f"{rep}_z"], device="cuda")
+    X = torch.tensor(data.obsm[rep], device="cuda")
 
     _, indices = nearest_neighbors(X, K)
     indices_np = indices.cpu().numpy().astype(int)

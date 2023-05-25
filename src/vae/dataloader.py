@@ -1,4 +1,6 @@
 from typing import Dict, List, Tuple
+
+from src.constants import BATCH_KEY, BATCH_N_KEY
 from src.vae.types import VAEInputT
 from anndata import AnnData
 import numpy as np
@@ -28,11 +30,7 @@ class UniModalDataset(torch.utils.data.dataset.Dataset):
         if "spatial_net" in self.dataset.uns:
             neighbors = self.dataset.uns["spatial_net"].loc[idx, "target"]
 
-        batch_categories = {}
-        for batch_key, _ in self.batch_keys.values():
-            batch_categories[batch_key] = torch.ByteTensor(
-                self.dataset[idx, :].obs.loc[:, batch_key].values
-            )
+        batch_id = torch.ByteTensor(self.dataset[idx, :].obs.loc[:, BATCH_KEY].values)
 
         if sparse.issparse(data):
             data = data.A
@@ -42,7 +40,7 @@ class UniModalDataset(torch.utils.data.dataset.Dataset):
             "neighbors": torch.Tensor(neighbors)
             if "spatial_net" in self.dataset.uns
             else None,
-            **batch_categories,
+            "batch_id": batch_id,
         }
 
     def __len__(self):
@@ -66,13 +64,14 @@ def adata_to_dataloader(
 def setup_batch_key(
     adata: AnnData, batch_keys: List[str]
 ) -> Dict[str, Tuple[str, int]]:
-    # if not BATCH_KEY in adata.obs.columns:
     batch_key_dict = {}
     for batch_key in batch_keys:
         key = f"batch_{batch_key}"
         adata.obs[key] = pd.Categorical(pd.factorize(adata.obs.loc[:, batch_key])[0])
         n_batch = len(adata.obs[key].cat.categories)
         batch_key_dict[batch_key] = (key, n_batch)
+        adata.uns[BATCH_N_KEY] = n_batch
+        adata.obs[BATCH_KEY] = adata.obs[key]
     return batch_key_dict
 
 

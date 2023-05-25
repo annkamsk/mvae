@@ -3,13 +3,13 @@ from typing import Dict, List, Optional, Tuple
 from src.vae.types import VAEInputT, VAEOutputT
 
 from src.vae.dataloader import adata_to_dataloader, setup_batch_key
-from src.vae.loss_calculator import LossCalculator as VAE_LossCalculator
+from src.vae.loss_calculator import VAEBLossCalculator
 import numpy as np
 import torch
 from tqdm import tqdm
 from src.types import TrainParams
 from src.utils import EarlyStopping, log_loss
-from src.vae.model import VAE
+from src.vae.model import VAE, VAEB
 from anndata import AnnData
 from torch.utils.tensorboard import SummaryWriter
 from torch import optim
@@ -91,12 +91,10 @@ def _train(
         )
 
     it = 0
-    loss_calculator = VAE_LossCalculator(
+    loss_calculator = VAEBLossCalculator(
         beta=model.params.beta,
         gamma=model.params.gamma,
         dropout=params.dropout,
-        batch_key_dict=batch_key_setup,
-        summary_writer=writer,
     )
     for epoch in range(params.n_epochs):
         torch.set_num_threads(16)
@@ -132,10 +130,6 @@ def _train(
                 it,
                 train=True,
             )
-            is_nan = torch.stack(
-                [torch.isnan(p).any() for p in model.parameters()]
-            ).any()
-            assert not is_nan.item(), "NaN in parameters"
             it += 1
 
         # Get epoch loss
@@ -167,7 +161,7 @@ def test_model(
     model: VAE,
     loader,
     params: TrainParams,
-    loss_calculator: VAE_LossCalculator,
+    loss_calculator: VAEBLossCalculator,
 ) -> Dict[str, float]:
     model.eval()
     loss_val = 0
@@ -242,3 +236,32 @@ def to_latent(
             latent.append(model_output["latent"]["z"].cpu())
 
     return latent
+
+
+def to_latent_vaeb(
+    model: VAEB,
+    adata: AnnData,
+    batch_keys: List[str] = ["sample"],
+    params: TrainParams = TrainParams(),
+):
+    batch_key_setup = setup_batch_key(adata, batch_keys)
+    model.to(model.device)
+    train_loader = adata_to_dataloader(
+        adata,
+        batch_size=params.batch_size,
+        batch_keys=batch_key_setup,
+        shuffle=False,
+    )
+
+    latent_b = []
+    latent_mod = []
+
+    with torch.no_grad():
+        model.eval()
+        for tensors in tqdm(train_loader):
+            tensors = {k: v.to(model.device) for k, v in tensors.items()}
+            model_output = model.forward(tensors)
+            latent_b.append(model_output["latent_b"]["z"].cpu())
+            latent_mod.append(model_output["latent_mod"]["z"].cpu())
+
+    return latent_b, latent_mod
