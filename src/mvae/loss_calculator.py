@@ -198,7 +198,7 @@ class LossCalculator:
         Tries to correct the POE latent space for batch effects with Harmony and calculates loss
         as LISI (Local Inverse Simpson Index) score.
         """
-        latent = output["poe_latent"]["z"]
+        latent = output["msi"]["latent_s"]["z"]
 
         n_neighbors = min(3 * perplexity, latent.shape[0] - 1)
         neighbors = nearest_neighbors(latent, n_neighbors)

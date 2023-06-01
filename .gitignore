@@ -2,6 +2,4 @@
 **/__pycache__
 data/
 logs/
-mvae_params/
-cache/
-reports/*.h5ad
+vae_params/
