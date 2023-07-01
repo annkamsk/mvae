@@ -26,3 +26,10 @@ Notebooks `SMVAE-thesis` and `MVAE-thesis` include training of the models using 
 
 ### Multimodal autoencoder
 ![MVAE](figures/MVAE.png)
+
+## Setup
+Easiest way to setup this project locally is to use [conda](https://docs.conda.io/en/latest/). File `mvae.yml` includes all packages necessary to run the code, so you can setup the environment with:
+```
+conda env create -f mvae.yml
+```
+The code assumes availability of CUDA on the server and if you want to run the code on CPU only, certain pytorch functions need adding of an additional argument `cuda=False`.
