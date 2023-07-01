@@ -3,13 +3,13 @@ from typing import Dict, List, Optional, Tuple
 from src.vae.types import VAEInputT, VAEOutputT
 
 from src.vae.dataloader import adata_to_dataloader, setup_batch_key
-from src.vae.loss_calculator import VAEBLossCalculator
+from src.vae.loss_calculator import LossCalculator
 import numpy as np
 import torch
 from tqdm import tqdm
 from src.types import TrainParams
 from src.utils import EarlyStopping, log_loss
-from src.vae.model import VAE, VAEB
+from src.vae.model import VAE
 from anndata import AnnData
 from torch.utils.tensorboard import SummaryWriter
 from torch import optim
@@ -91,7 +91,7 @@ def _train(
         )
 
     it = 0
-    loss_calculator = VAEBLossCalculator(
+    loss_calculator = LossCalculator(
         beta=model.params.beta,
         gamma=model.params.gamma,
         dropout=params.dropout,
@@ -161,7 +161,7 @@ def test_model(
     model: VAE,
     loader,
     params: TrainParams,
-    loss_calculator: VAEBLossCalculator,
+    loss_calculator: LossCalculator,
 ) -> Dict[str, float]:
     model.eval()
     loss_val = 0
@@ -236,32 +236,3 @@ def to_latent(
             latent.append(model_output["latent"]["z"].cpu())
 
     return latent
-
-
-def to_latent_vaeb(
-    model: VAEB,
-    adata: AnnData,
-    batch_keys: List[str] = ["sample"],
-    params: TrainParams = TrainParams(),
-):
-    batch_key_setup = setup_batch_key(adata, batch_keys)
-    model.to(model.device)
-    train_loader = adata_to_dataloader(
-        adata,
-        batch_size=params.batch_size,
-        batch_keys=batch_key_setup,
-        shuffle=False,
-    )
-
-    latent_b = []
-    latent_mod = []
-
-    with torch.no_grad():
-        model.eval()
-        for tensors in tqdm(train_loader):
-            tensors = {k: v.to(model.device) for k, v in tensors.items()}
-            model_output = model.forward(tensors)
-            latent_b.append(model_output["latent_b"]["z"].cpu())
-            latent_mod.append(model_output["latent_mod"]["z"].cpu())
-
-    return latent_b, latent_mod

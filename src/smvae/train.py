@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from src.smvae.types import ModalityOutput, ModelOutputT
 from src.smvae.types import ModelInputT

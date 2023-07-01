@@ -126,38 +126,3 @@ def plot_spatial(
             title=s,
             wspace=0.35,
         )
-
-
-def plot_embedding_vaeb(
-    model: VAEB,
-    adata: AnnData,
-    keys: List[str] = ["sample", "tissue", "new_ann"],
-    batch_keys: str = ["sample"],
-    train_params: TrainParams = TrainParams(),
-):
-    emb_b, emb_mod = to_latent_vaeb(model, adata, batch_keys, train_params)
-
-    adata.obsm["z_b"] = np.vstack([x.numpy() for x in emb_b])
-    adata.obsm["z_mod"] = np.vstack([x.numpy() for x in emb_mod])
-    sc.pp.neighbors(adata, n_neighbors=5, use_rep="z_b", key_added=f"neigh_z_b")
-    sc.tl.umap(adata, neighbors_key=f"neigh_z_b")
-    adata.obsm["X_z_b"] = adata.obsm["X_umap"]
-
-    sc.pp.neighbors(adata, use_rep="z_mod", key_added=f"neigh_z_mod")
-    sc.tl.umap(adata, neighbors_key=f"neigh_z_mod")
-    adata.obsm["X_z_mod"] = adata.obsm["X_umap"]
-
-    sc.pl.embedding(
-        adata,
-        "X_z_mod",
-        color=keys,
-        size=15,
-        wspace=0.35,
-    )
-    sc.pl.embedding(
-        adata,
-        "X_z_b",
-        color=keys,
-        size=15,
-        wspace=0.35,
-    )
